@@ -288,6 +288,88 @@ var CyclePage = (function() {
     });
   }
 
+  function showBatchConflictDialog(conflictList, okList) {
+    var content = document.createElement('div');
+
+    var header = document.createElement('div');
+    header.className = 'flex-between';
+    header.style.marginBottom = 'var(--spacing-md)';
+    header.innerHTML =
+      '<div style="font-weight:var(--font-weight-semibold);color:var(--color-error)">⚠️ 检测到 ' + conflictList.length + ' 条档期冲突</div>' +
+      '<span class="text-success">' + okList.length + ' 条可正常生成</span>';
+    content.appendChild(header);
+
+    var conflictTitle = document.createElement('div');
+    conflictTitle.style.fontSize = 'var(--font-size-sm)';
+    conflictTitle.style.color = 'var(--color-text-secondary)';
+    conflictTitle.style.marginBottom = 'var(--spacing-sm)';
+    conflictTitle.textContent = '冲突清单：';
+    content.appendChild(conflictTitle);
+
+    var conflictBody = document.createElement('div');
+    conflictBody.style.maxHeight = '200px';
+    conflictBody.style.overflowY = 'auto';
+    conflictBody.style.border = '1px solid var(--color-border-light)';
+    conflictBody.style.borderRadius = 'var(--radius-md)';
+    conflictBody.style.padding = 'var(--spacing-sm)';
+    conflictBody.style.background = 'var(--color-bg-gray)';
+
+    conflictList.slice(0, 10).forEach(function(c) {
+      var row = document.createElement('div');
+      row.className = 'flex-between';
+      row.style.padding = 'var(--spacing-xs) 0';
+      row.style.borderBottom = '1px dashed var(--color-border-light)';
+      row.innerHTML =
+        '<span>' + DateUtils.formatDate(c.startTime, 'MM-DD ww') + '</span>' +
+        '<span class="text-secondary">' + DateUtils.formatDate(c.startTime, 'HH:mm') +
+        ' - ' + DateUtils.formatDate(c.endTime, 'HH:mm') + '</span>' +
+        '<span class="text-error" style="font-size:var(--font-size-sm)">冲突</span>';
+      conflictBody.appendChild(row);
+    });
+    if (conflictList.length > 10) {
+      var more = document.createElement('div');
+      more.className = 'text-secondary';
+      more.style.textAlign = 'center';
+      more.style.padding = 'var(--spacing-xs) 0';
+      more.style.fontSize = 'var(--font-size-sm)';
+      more.textContent = '... 还有 ' + (conflictList.length - 10) + ' 条';
+      conflictBody.appendChild(more);
+    }
+    content.appendChild(conflictBody);
+
+    var tip = document.createElement('div');
+    tip.className = 'text-secondary';
+    tip.style.fontSize = 'var(--font-size-sm)';
+    tip.style.marginTop = 'var(--spacing-md)';
+    tip.textContent = '同一机阵在上述时间段已有表演、排练或维护占用。';
+    content.appendChild(tip);
+
+    Modal.show({
+      title: '档期冲突提醒',
+      content: content,
+      confirmText: '仅生成 ' + okList.length + ' 条',
+      cancelText: '全部强制生成',
+      showCancel: true,
+      onConfirm: function() {
+        if (okList.length > 0) {
+          Store.addSchedulesBatch(okList);
+        }
+        CommonUtils.showToast('已生成 ' + okList.length + ' 条，跳过 ' + conflictList.length + ' 条冲突');
+        refreshPage();
+        return true;
+      },
+      onCancel: function() {
+        var allList = okList.concat(conflictList);
+        if (allList.length > 0) {
+          Store.addSchedulesBatch(allList);
+        }
+        CommonUtils.showToast('已生成 ' + allList.length + ' 条（含 ' + conflictList.length + ' 条冲突）');
+        refreshPage();
+        return true;
+      }
+    });
+  }
+
   function showGenerateModal(rule) {
     var content = document.createElement('div');
 
@@ -361,12 +443,41 @@ var CyclePage = (function() {
         }
 
         var occupancies = Store.generateCycleOccupancies(rule.id, startDate, endDate);
-
-        if (occupancies.length > 0) {
-          Store.addSchedulesBatch(occupancies);
+        if (occupancies.length === 0) {
+          CommonUtils.showToast('该范围内无可生成的排期');
+          return false;
         }
 
-        CommonUtils.showToast('成功生成 ' + occupancies.length + ' 条排期');
+        var conflictList = [];
+        var okList = [];
+        var existingSchedules = Store.getState().schedules;
+
+        occupancies.forEach(function(occ) {
+          var startMs = new Date(occ.startTime).getTime();
+          var endMs = new Date(occ.endTime).getTime();
+          var hasConflict = existingSchedules.some(function(es) {
+            if (es.status === 'cancelled') return false;
+            if (es.fleetId !== occ.fleetId) return false;
+            var esStart = new Date(es.startTime).getTime();
+            var esEnd = new Date(es.endTime).getTime();
+            return startMs < esEnd && endMs > esStart;
+          });
+          if (hasConflict) {
+            conflictList.push(occ);
+          } else {
+            okList.push(occ);
+          }
+        });
+
+        if (conflictList.length > 0) {
+          showBatchConflictDialog(conflictList, okList);
+          return false;
+        }
+
+        if (okList.length > 0) {
+          Store.addSchedulesBatch(okList);
+        }
+        CommonUtils.showToast('成功生成 ' + okList.length + ' 条排期');
         refreshPage();
         return true;
       }

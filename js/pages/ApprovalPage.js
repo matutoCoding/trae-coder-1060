@@ -173,24 +173,67 @@ var ApprovalPage = (function() {
     content.appendChild(flowEl);
 
     var canApprove = approval.status === 'pending' && approval.currentStep > 0;
+    var isDraft = approval.status === 'draft';
 
     Modal.show({
       title: approval.title,
       content: content,
-      confirmText: canApprove ? '审批' : '关闭',
-      cancelText: canApprove ? '拒绝' : undefined,
-      showCancel: canApprove,
+      confirmText: isDraft ? '提交审批' : (canApprove ? '同意' : '关闭'),
+      cancelText: isDraft ? '取消' : (canApprove ? '拒绝' : undefined),
+      showCancel: isDraft || canApprove,
       onConfirm: function() {
-        if (canApprove) {
+        if (isDraft) {
+          submitDraftApproval(approval);
+        } else if (canApprove) {
           approveApproval(approval.id);
         }
         return true;
       },
-      onCancel: canApprove ? function() {
+      onCancel: isDraft ? undefined : (canApprove ? function() {
         rejectApproval(approval.id);
         return true;
-      } : undefined
+      } : undefined)
     });
+  }
+
+  function submitDraftApproval(approval) {
+    var matchedRoute = Store.getRouteConfigByCondition({
+      scale: approval.scale,
+      isSpecial: approval.isSpecial === true
+    });
+
+    if (!matchedRoute) {
+      CommonUtils.showToast('未匹配到审批流程，请先配置路由');
+      return;
+    }
+
+    var initialSteps = matchedRoute.steps.map(function(step, index) {
+      return {
+        id: step.id,
+        name: step.name,
+        role: step.role,
+        status: index === 0 ? 'active' : 'pending',
+        approver: null,
+        time: null,
+        comment: null
+      };
+    });
+
+    Store.updateApproval(approval.id, {
+      status: 'pending',
+      routeConfigId: matchedRoute.id,
+      submitTime: new Date().toISOString(),
+      currentStep: 1,
+      totalSteps: initialSteps.length,
+      steps: initialSteps
+    });
+
+    if (approval.scheduleId) {
+      Store.updateSchedule(approval.scheduleId, { status: 'pending' });
+    }
+
+    CommonUtils.showToast('已提交，自动匹配「' + matchedRoute.name + '」');
+    refreshPage();
   }
 
   function approveApproval(id) {
@@ -223,6 +266,14 @@ var ApprovalPage = (function() {
       steps: newSteps
     });
 
+    if (approval.scheduleId) {
+      if (newStatus === 'approved') {
+        Store.updateSchedule(approval.scheduleId, { status: 'approved' });
+      } else {
+        Store.updateSchedule(approval.scheduleId, { status: 'pending' });
+      }
+    }
+
     CommonUtils.showToast(newStatus === 'approved' ? '审批已通过' : '已通过，进入下一环节');
     refreshPage();
   }
@@ -250,8 +301,159 @@ var ApprovalPage = (function() {
       steps: newSteps
     });
 
+    if (approval.scheduleId) {
+      Store.updateSchedule(approval.scheduleId, { status: 'confirmed' });
+    }
+
     CommonUtils.showToast('已拒绝');
     refreshPage();
+  }
+
+  function showCreateApproval() {
+    var schedules = Store.getState().schedules.filter(function(s) {
+      return s.type === 'performance' && !s.approvalId;
+    });
+
+    if (schedules.length === 0) {
+      CommonUtils.showToast('暂无可发起的表演排期');
+      return;
+    }
+
+    var content = document.createElement('div');
+
+    content.innerHTML =
+      '<div class="form-item">' +
+      '<label class="form-label">选择表演排期</label>' +
+      '<select class="form-select" id="create-approval-schedule">' +
+      schedules.map(function(s) {
+        return '<option value="' + s.id + '">' + s.title + ' (' + DateUtils.formatDate(s.startTime, 'MM-DD HH:mm') + ' · ' + s.fleetName + ')</option>';
+      }).join('') +
+      '</select>' +
+      '</div>' +
+      '<div class="form-item">' +
+      '<label class="form-label">表演规模</label>' +
+      '<select class="form-select" id="create-approval-scale">' +
+      '<option value="small">小型</option>' +
+      '<option value="medium" selected>中型</option>' +
+      '<option value="large">大型</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="form-item">' +
+      '<label class="form-label">特殊场地（天安门/机场/军事区等）</label>' +
+      '<select class="form-select" id="create-approval-special">' +
+      '<option value="false" selected>否</option>' +
+      '<option value="true">是</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="form-item">' +
+      '<label class="form-label">提交人</label>' +
+      '<input type="text" class="form-input" id="create-approval-submitter" value="当前用户">' +
+      '</div>' +
+      '<div id="create-approval-preview" style="padding:var(--spacing-md);background:var(--color-bg-gray);border-radius:var(--radius-md);margin-top:var(--spacing-md);">' +
+      '<div style="font-size:var(--font-size-sm);color:var(--color-text-secondary)">选择规模和场地后可预览匹配的审批链</div>' +
+      '</div>';
+
+    Modal.show({
+      title: '发起表演审批',
+      content: content,
+      confirmText: '提交审批',
+      cancelText: '取消',
+      showCancel: true,
+      onConfirm: function() {
+        var scheduleId = document.getElementById('create-approval-schedule').value;
+        var scale = document.getElementById('create-approval-scale').value;
+        var isSpecial = document.getElementById('create-approval-special').value === 'true';
+        var submitter = document.getElementById('create-approval-submitter').value.trim();
+
+        if (!scheduleId) {
+          CommonUtils.showToast('请选择表演排期');
+          return false;
+        }
+        if (!submitter) {
+          CommonUtils.showToast('请输入提交人');
+          return false;
+        }
+
+        var selectedSchedule = Store.getScheduleById(scheduleId);
+        if (!selectedSchedule) {
+          CommonUtils.showToast('排期不存在');
+          return false;
+        }
+
+        var matchedRoute = Store.getRouteConfigByCondition({
+          scale: scale,
+          isSpecial: isSpecial
+        });
+        if (!matchedRoute) {
+          CommonUtils.showToast('未匹配到审批流程');
+          return false;
+        }
+
+        var initialSteps = matchedRoute.steps.map(function(step, index) {
+          return {
+            id: step.id,
+            name: step.name,
+            role: step.role,
+            status: index === 0 ? 'active' : 'pending',
+            approver: null,
+            time: null,
+            comment: null
+          };
+        });
+
+        var approval = {
+          title: selectedSchedule.title + ' - 表演报批',
+          scale: scale,
+          isSpecial: isSpecial,
+          location: selectedSchedule.location || '未知地点',
+          submitter: submitter,
+          status: 'pending',
+          routeConfigId: matchedRoute.id,
+          submitTime: new Date().toISOString(),
+          currentStep: 1,
+          totalSteps: initialSteps.length,
+          steps: initialSteps,
+          scheduleId: scheduleId
+        };
+
+        var created = Store.addApproval(approval);
+
+        Store.updateSchedule(scheduleId, {
+          status: 'pending',
+          approvalId: created.id
+        });
+
+        CommonUtils.showToast('已提交，匹配「' + matchedRoute.name + '」');
+        refreshPage();
+        return true;
+      }
+    });
+
+    setTimeout(function() {
+      var scaleEl = document.getElementById('create-approval-scale');
+      var specialEl = document.getElementById('create-approval-special');
+      var previewEl = document.getElementById('create-approval-preview');
+      if (scaleEl) scaleEl.onchange = updatePreview;
+      if (specialEl) specialEl.onchange = updatePreview;
+      function updatePreview() {
+        if (!previewEl) return;
+        var sc = document.getElementById('create-approval-scale').value;
+        var sp = document.getElementById('create-approval-special').value === 'true';
+        var matched = Store.getRouteConfigByCondition({ scale: sc, isSpecial: sp });
+        if (matched) {
+          previewEl.innerHTML = '<div style="font-size:var(--font-size-sm)">✅ 匹配：<b>' + matched.name + '</b>（' + matched.steps.length + ' 步）</div>';
+          var html = '<div style="margin-top:8px;font-size:12px;color:var(--color-text-secondary)">';
+          matched.steps.forEach(function(st, i) {
+            html += '<div style="padding:2px 0">' + (i + 1) + '. ' + st.name + '（' + getRoleLabel(st.role) + '）</div>';
+          });
+          html += '</div>';
+          previewEl.innerHTML += html;
+        } else {
+          previewEl.innerHTML = '<div class="text-error">⚠️ 未匹配</div>';
+        }
+      }
+      updatePreview();
+    }, 50);
   }
 
   function renderRouteConfigCard(config) {
@@ -783,9 +985,20 @@ var ApprovalPage = (function() {
 
     page.appendChild(filterTabs);
 
+    var sectionTitle = document.createElement('div');
+    sectionTitle.className = 'section-title';
+    sectionTitle.id = 'approval-section-title';
+    sectionTitle.innerHTML = '<span>审批列表</span><span class="section-title-extra" id="create-approval-btn">+ 发起审批</span>';
+    page.appendChild(sectionTitle);
+
     var content = document.createElement('div');
     content.id = 'approval-content';
     page.appendChild(content);
+
+    setTimeout(function() {
+      var btn = document.getElementById('create-approval-btn');
+      if (btn) btn.onclick = showCreateApproval;
+    }, 0);
 
     container.appendChild(page);
 
@@ -797,11 +1010,14 @@ var ApprovalPage = (function() {
         currentView = item.dataset.view;
 
         var filterTabsEl = document.getElementById('approval-filter-tabs');
+        var sectionTitleEl = document.getElementById('approval-section-title');
         if (currentView === 'routes') {
-          filterTabsEl.style.display = 'none';
+          if (filterTabsEl) filterTabsEl.style.display = 'none';
+          if (sectionTitleEl) sectionTitleEl.style.display = 'none';
           renderRouteList();
         } else {
-          filterTabsEl.style.display = 'flex';
+          if (filterTabsEl) filterTabsEl.style.display = 'flex';
+          if (sectionTitleEl) sectionTitleEl.style.display = 'flex';
           renderApprovalList();
         }
       };

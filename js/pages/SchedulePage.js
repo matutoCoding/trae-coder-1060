@@ -1,7 +1,7 @@
 var SchedulePage = (function() {
   var selectedDate = new Date();
   var filterType = 'all';
-  var calendarEl = null;
+  var pageInstance = null;
 
   function getScheduleMap() {
     var schedules = Store.getState().schedules;
@@ -64,6 +64,33 @@ var SchedulePage = (function() {
     return DateUtils.formatDuration(minutes);
   }
 
+  function checkConflicts(fleetId, startTime, endTime, excludeId) {
+    var schedules = Store.getState().schedules;
+    var start = new Date(startTime).getTime();
+    var end = new Date(endTime).getTime();
+    var conflicts = [];
+
+    schedules.forEach(function(s) {
+      if (excludeId && s.id === excludeId) return;
+      if (s.status === 'cancelled') return;
+      if (s.fleetId !== fleetId) return;
+
+      var sStart = new Date(s.startTime).getTime();
+      var sEnd = new Date(s.endTime).getTime();
+      if (start < sEnd && end > sStart) {
+        conflicts.push({
+          id: s.id,
+          title: s.title,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          type: s.type
+        });
+      }
+    });
+
+    return conflicts;
+  }
+
   function renderScheduleItem(schedule) {
     var item = document.createElement('div');
     item.className = 'schedule-item';
@@ -114,6 +141,28 @@ var SchedulePage = (function() {
     }
 
     info.appendChild(desc);
+
+    if (schedule.approvalId) {
+      var approval = Store.getApprovalById(schedule.approvalId);
+      if (approval) {
+        var approvalBar = document.createElement('div');
+        approvalBar.className = 'approval-progress';
+        approvalBar.style.marginTop = 'var(--spacing-xs)';
+        approvalBar.style.padding = '0';
+        var percent = approval.totalSteps > 0 ? Math.round((approval.currentStep / approval.totalSteps) * 100) : 0;
+        approvalBar.innerHTML =
+          '<div class="approval-progress-text" style="margin-bottom:4px">' +
+          '<span style="font-size:11px">审批进度</span>' +
+          '<span style="font-size:11px">' + approval.currentStep + '/' + approval.totalSteps +
+          ' · ' + getApprovalSimpleStatus(approval.status) + '</span>' +
+          '</div>' +
+          '<div class="approval-progress-bar" style="height:4px">' +
+          '<div class="approval-progress-fill" style="width:' + percent + '%"></div>' +
+          '</div>';
+        info.appendChild(approvalBar);
+      }
+    }
+
     item.appendChild(info);
 
     item.onclick = function() {
@@ -121,6 +170,16 @@ var SchedulePage = (function() {
     };
 
     return item;
+  }
+
+  function getApprovalSimpleStatus(status) {
+    switch (status) {
+      case 'pending': return '审批中';
+      case 'approved': return '已通过 ✓';
+      case 'rejected': return '已驳回 ✗';
+      case 'draft': return '草稿';
+      default: return status;
+    }
   }
 
   function showScheduleDetail(schedule) {
@@ -149,12 +208,6 @@ var SchedulePage = (function() {
       DateUtils.formatDate(schedule.endTime, 'HH:mm') + '</div>';
     content.appendChild(timeRow);
 
-    var durationRow = document.createElement('div');
-    durationRow.className = 'detail-row';
-    durationRow.innerHTML = '<div class="detail-label">时长</div><div class="detail-value">' +
-      getDuration(schedule.startTime, schedule.endTime) + '</div>';
-    content.appendChild(durationRow);
-
     if (schedule.fleetName) {
       var fleetRow = document.createElement('div');
       fleetRow.className = 'detail-row';
@@ -171,31 +224,67 @@ var SchedulePage = (function() {
       content.appendChild(locRow);
     }
 
-    if (schedule.client) {
-      var clientRow = document.createElement('div');
-      clientRow.className = 'detail-row';
-      clientRow.innerHTML = '<div class="detail-label">客户</div><div class="detail-value">' +
-        schedule.client + '</div>';
-      content.appendChild(clientRow);
+    if (schedule.approvalId) {
+      var approval = Store.getApprovalById(schedule.approvalId);
+      if (approval) {
+        var divider1 = document.createElement('div');
+        divider1.className = 'divider';
+        content.appendChild(divider1);
+
+        var approvalTitle = document.createElement('div');
+        approvalTitle.style.fontWeight = 'var(--font-weight-medium)';
+        approvalTitle.style.marginBottom = 'var(--spacing-sm)';
+        approvalTitle.textContent = '关联审批';
+        content.appendChild(approvalTitle);
+
+        var flowEl = ApprovalFlow.create(approval.steps);
+        content.appendChild(flowEl);
+
+        if (approval.status === 'approved') {
+          var passTip = document.createElement('div');
+          passTip.className = 'text-success';
+          passTip.style.fontSize = 'var(--font-size-sm)';
+          passTip.style.marginTop = 'var(--spacing-sm)';
+          passTip.textContent = '✅ 审批已通过，此演出可执行';
+          content.appendChild(passTip);
+        } else if (approval.status === 'rejected') {
+          var rejTip = document.createElement('div');
+          rejTip.className = 'text-error';
+          rejTip.style.fontSize = 'var(--font-size-sm)';
+          rejTip.style.marginTop = 'var(--spacing-sm)';
+          rejTip.textContent = '⚠️ 审批已驳回，此演出暂不可执行';
+          content.appendChild(rejTip);
+        } else if (approval.status === 'pending') {
+          var pendTip = document.createElement('div');
+          pendTip.className = 'text-warning';
+          pendTip.style.fontSize = 'var(--font-size-sm)';
+          pendTip.style.marginTop = 'var(--spacing-sm)';
+          pendTip.textContent = '⏳ 审批进行中，暂不可执行';
+          content.appendChild(pendTip);
+        }
+      }
     }
 
-    if (schedule.description) {
-      var descRow = document.createElement('div');
-      descRow.className = 'detail-row';
-      descRow.innerHTML = '<div class="detail-label">描述</div><div class="detail-value">' +
-        schedule.description + '</div>';
-      content.appendChild(descRow);
+    if (schedule.type === 'performance' && !schedule.approvalId) {
+      var divider2 = document.createElement('div');
+      divider2.className = 'divider';
+      content.appendChild(divider2);
+      var tip2 = document.createElement('div');
+      tip2.className = 'text-secondary';
+      tip2.style.fontSize = 'var(--font-size-sm)';
+      tip2.textContent = '💡 此表演尚未发起审批，请前往分支审批模块发起报批';
+      content.appendChild(tip2);
     }
 
     if (schedule.isFromCycle) {
-      var divider = document.createElement('div');
-      divider.className = 'divider';
-      content.appendChild(divider);
-      var tip = document.createElement('div');
-      tip.style.fontSize = 'var(--font-size-sm)';
-      tip.style.color = 'var(--color-text-tertiary)';
-      tip.textContent = '⚠️ 此排期由周期规则批量生成，编辑后将与规则解除关联';
-      content.appendChild(tip);
+      var divider3 = document.createElement('div');
+      divider3.className = 'divider';
+      content.appendChild(divider3);
+      var tip3 = document.createElement('div');
+      tip3.style.fontSize = 'var(--font-size-sm)';
+      tip3.style.color = 'var(--color-text-tertiary)';
+      tip3.textContent = '⚠️ 此排期由周期规则批量生成，编辑后将与规则解除关联';
+      content.appendChild(tip3);
     }
 
     Modal.show({
@@ -214,7 +303,7 @@ var SchedulePage = (function() {
           function() {
             Store.deleteSchedule(schedule.id);
             CommonUtils.showToast('已删除');
-            refreshPage();
+            refreshPage(selectedDate);
             return true;
           }
         );
@@ -277,6 +366,11 @@ var SchedulePage = (function() {
       '<input type="text" class="form-input" id="edit-location" value="' + (schedule.location || '') + '">';
     content.appendChild(locationItem);
 
+    var conflictHint = document.createElement('div');
+    conflictHint.id = 'conflict-hint';
+    conflictHint.style.display = 'none';
+    content.appendChild(conflictHint);
+
     Modal.show({
       title: '编辑排期',
       content: content,
@@ -327,24 +421,91 @@ var SchedulePage = (function() {
           return false;
         }
 
-        Store.updateSchedule(schedule.id, {
-          title: titleVal,
-          fleetId: fleetIdVal,
-          fleetName: fleet ? fleet.name : '',
-          startTime: newStart.toISOString(),
-          endTime: newEnd.toISOString(),
-          location: locationVal,
-          isFromCycle: false
-        });
+        var conflicts = checkConflicts(fleetIdVal, newStart.toISOString(), newEnd.toISOString(), schedule.id);
+        if (conflicts.length > 0) {
+          showConflictDialog(conflicts, function(forceSave) {
+            if (!forceSave) return;
+            doSave(schedule, titleVal, fleetIdVal, fleet, newStart, newEnd, locationVal);
+          });
+          return false;
+        }
 
-        CommonUtils.showToast('保存成功');
-        refreshPage();
+        doSave(schedule, titleVal, fleetIdVal, fleet, newStart, newEnd, locationVal);
         return true;
       }
     });
   }
 
-  function refreshPage() {
+  function doSave(schedule, titleVal, fleetIdVal, fleet, newStart, newEnd, locationVal) {
+    Store.updateSchedule(schedule.id, {
+      title: titleVal,
+      fleetId: fleetIdVal,
+      fleetName: fleet ? fleet.name : '',
+      startTime: newStart.toISOString(),
+      endTime: newEnd.toISOString(),
+      location: locationVal,
+      isFromCycle: false
+    });
+
+    CommonUtils.showToast('保存成功');
+    var targetDate = new Date(
+      newStart.getFullYear(),
+      newStart.getMonth(),
+      newStart.getDate()
+    );
+    refreshPage(targetDate);
+  }
+
+  function showConflictDialog(conflicts, callback) {
+    var content = document.createElement('div');
+    content.innerHTML = '<div style="color:var(--color-error);font-weight:var(--font-weight-semibold);margin-bottom:var(--spacing-md)">⚠️ 检测到 ' + conflicts.length + ' 个档期冲突</div>';
+
+    conflicts.forEach(function(c) {
+      var row = document.createElement('div');
+      row.className = 'flex-between';
+      row.style.padding = 'var(--spacing-sm) 0';
+      row.style.borderBottom = '1px solid var(--color-border-light)';
+      row.innerHTML =
+        '<div>' +
+        '<div style="font-weight:var(--font-weight-medium)">' + c.title + '</div>' +
+        '<div style="font-size:var(--font-size-xs);color:var(--color-text-secondary)">' +
+        getTypeLabel(c.type) + ' · ' +
+        DateUtils.formatDate(c.startTime, 'MM-DD HH:mm') + ' ~ ' +
+        DateUtils.formatDate(c.endTime, 'HH:mm') +
+        '</div>' +
+        '</div>' +
+        '<span class="text-error" style="font-size:var(--font-size-sm)">冲突</span>';
+      content.appendChild(row);
+    });
+
+    var tip = document.createElement('div');
+    tip.className = 'text-secondary';
+    tip.style.fontSize = 'var(--font-size-sm)';
+    tip.style.marginTop = 'var(--spacing-md)';
+    tip.textContent = '是否仍然强制保存？可能导致机阵资源重复占用。';
+    content.appendChild(tip);
+
+    Modal.show({
+      title: '档期冲突',
+      content: content,
+      confirmText: '强制保存',
+      cancelText: '取消',
+      showCancel: true,
+      onConfirm: function() {
+        callback(true);
+        return true;
+      },
+      onCancel: function() {
+        callback(false);
+        return true;
+      }
+    });
+  }
+
+  function refreshPage(date) {
+    if (date instanceof Date) {
+      selectedDate = date;
+    }
     var mainContent = document.getElementById('main-content');
     if (!mainContent) return;
     mainContent.innerHTML = '';
@@ -352,8 +513,12 @@ var SchedulePage = (function() {
   }
 
   function render(container) {
-    selectedDate = new Date();
-    filterType = 'all';
+    if (!selectedDate || !(selectedDate instanceof Date)) {
+      selectedDate = new Date();
+    }
+    if (!filterType) {
+      filterType = 'all';
+    }
 
     var page = document.createElement('div');
     page.className = 'page-container';
@@ -364,12 +529,16 @@ var SchedulePage = (function() {
       '<div class="page-subtitle">查看和管理无人机表演与排练日程</div>';
     page.appendChild(pageHeader);
 
-    calendarEl = Calendar.create({
+    var calendarEl = Calendar.create({
       date: selectedDate,
       selectedDate: selectedDate,
       scheduleData: getScheduleMap(),
       onDateSelect: function(date) {
         selectedDate = date;
+        var listTitle = document.querySelector('.section-title span');
+        if (listTitle) {
+          listTitle.textContent = DateUtils.formatDate(selectedDate, 'MM月DD日 ww') + ' 日程';
+        }
         renderScheduleList();
       }
     });
@@ -422,6 +591,8 @@ var SchedulePage = (function() {
         CommonUtils.showToast('新建排期功能开发中');
       };
     }
+
+    pageInstance = container;
   }
 
   function renderScheduleList() {
@@ -458,6 +629,8 @@ var SchedulePage = (function() {
 
   return {
     render: render,
-    init: init
+    init: init,
+    checkConflicts: checkConflicts,
+    refreshPage: refreshPage
   };
 })();
