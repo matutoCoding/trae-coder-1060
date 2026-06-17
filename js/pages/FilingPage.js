@@ -206,13 +206,16 @@ var FilingPage = (function() {
     });
 
     CommonUtils.showToast('已提交空域审批');
-    if (typeof render === 'function') {
-      var mainContent = document.getElementById('main-content');
-      if (mainContent) {
-        mainContent.innerHTML = '';
-        render(mainContent);
+    Modal.hideAll();
+    setTimeout(function() {
+      if (typeof render === 'function') {
+        var mainContent = document.getElementById('main-content');
+        if (mainContent) {
+          mainContent.innerHTML = '';
+          render(mainContent);
+        }
       }
-    }
+    }, 150);
   }
 
   function renderFilingList() {

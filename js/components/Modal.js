@@ -7,6 +7,12 @@ var Modal = (function() {
     }
   }
 
+  function getAllMasks() {
+    init();
+    if (!container) return [];
+    return Array.prototype.slice.call(container.querySelectorAll('.modal-mask'));
+  }
+
   function show(options) {
     init();
     if (!container) return null;
@@ -89,13 +95,34 @@ var Modal = (function() {
   }
 
   function hide(mask) {
-    if (!mask) return;
-    mask.classList.remove('show');
+    init();
+    var targetMask = mask;
+    if (!targetMask) {
+      var masks = getAllMasks();
+      if (masks.length === 0) return;
+      targetMask = masks[masks.length - 1];
+    }
+    if (!targetMask || !targetMask.classList) return;
+    targetMask.classList.remove('show');
     setTimeout(function() {
-      if (mask.parentNode) {
-        mask.parentNode.removeChild(mask);
+      if (targetMask.parentNode) {
+        targetMask.parentNode.removeChild(targetMask);
       }
     }, 300);
+  }
+
+  function hideAll() {
+    var masks = getAllMasks();
+    for (var i = masks.length - 1; i >= 0; i--) {
+      (function(m) {
+        m.classList.remove('show');
+        setTimeout(function() {
+          if (m.parentNode) {
+            m.parentNode.removeChild(m);
+          }
+        }, 300);
+      })(masks[i]);
+    }
   }
 
   function alert(message, callback) {
@@ -120,6 +147,7 @@ var Modal = (function() {
   return {
     show: show,
     hide: hide,
+    hideAll: hideAll,
     alert: alert,
     confirm: confirm
   };

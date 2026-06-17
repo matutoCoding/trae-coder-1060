@@ -344,6 +344,13 @@ var CyclePage = (function() {
     tip.textContent = '同一机阵在上述时间段已有表演、排练或维护占用。';
     content.appendChild(tip);
 
+    var firstDate = null;
+    var allList = okList.length > 0 ? okList : conflictList;
+    if (allList.length > 0) {
+      var first = new Date(allList[0].startTime);
+      firstDate = new Date(first.getFullYear(), first.getMonth(), first.getDate());
+    }
+
     Modal.show({
       title: '档期冲突提醒',
       content: content,
@@ -351,20 +358,38 @@ var CyclePage = (function() {
       cancelText: '全部强制生成',
       showCancel: true,
       onConfirm: function() {
-        if (okList.length > 0) {
-          Store.addSchedulesBatch(okList);
-        }
-        CommonUtils.showToast('已生成 ' + okList.length + ' 条，跳过 ' + conflictList.length + ' 条冲突');
-        refreshPage();
+        Modal.hideAll();
+        setTimeout(function() {
+          if (okList.length > 0) {
+            Store.addSchedulesBatch(okList);
+          }
+          CommonUtils.showToast('已生成 ' + okList.length + ' 条，跳过 ' + conflictList.length + ' 条冲突');
+          refreshPage(firstDate);
+          if (firstDate) {
+            setTimeout(function() {
+              Router.navigate('schedule');
+              SchedulePage.refreshPage(firstDate);
+            }, 200);
+          }
+        }, 150);
         return true;
       },
       onCancel: function() {
-        var allList = okList.concat(conflictList);
-        if (allList.length > 0) {
-          Store.addSchedulesBatch(allList);
-        }
-        CommonUtils.showToast('已生成 ' + allList.length + ' 条（含 ' + conflictList.length + ' 条冲突）');
-        refreshPage();
+        Modal.hideAll();
+        setTimeout(function() {
+          var listAll = okList.concat(conflictList);
+          if (listAll.length > 0) {
+            Store.addSchedulesBatch(listAll);
+          }
+          CommonUtils.showToast('已生成 ' + listAll.length + ' 条（含 ' + conflictList.length + ' 条冲突）');
+          refreshPage(firstDate);
+          if (firstDate) {
+            setTimeout(function() {
+              Router.navigate('schedule');
+              SchedulePage.refreshPage(firstDate);
+            }, 200);
+          }
+        }, 150);
         return true;
       }
     });

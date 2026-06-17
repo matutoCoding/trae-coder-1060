@@ -233,7 +233,8 @@ var ApprovalPage = (function() {
     }
 
     CommonUtils.showToast('已提交，自动匹配「' + matchedRoute.name + '」');
-    refreshPage();
+    Modal.hideAll();
+    setTimeout(refreshPage, 150);
   }
 
   function approveApproval(id) {
@@ -275,7 +276,8 @@ var ApprovalPage = (function() {
     }
 
     CommonUtils.showToast(newStatus === 'approved' ? '审批已通过' : '已通过，进入下一环节');
-    refreshPage();
+    Modal.hideAll();
+    setTimeout(refreshPage, 150);
   }
 
   function rejectApproval(id) {
@@ -306,7 +308,8 @@ var ApprovalPage = (function() {
     }
 
     CommonUtils.showToast('已拒绝');
-    refreshPage();
+    Modal.hideAll();
+    setTimeout(refreshPage, 150);
   }
 
   function showCreateApproval() {
@@ -424,7 +427,8 @@ var ApprovalPage = (function() {
         });
 
         CommonUtils.showToast('已提交，匹配「' + matchedRoute.name + '」');
-        refreshPage();
+        Modal.hideAll();
+        setTimeout(refreshPage, 150);
         return true;
       }
     });
@@ -752,7 +756,8 @@ var ApprovalPage = (function() {
         });
 
         CommonUtils.showToast('保存成功');
-        refreshPage();
+        Modal.hideAll();
+        setTimeout(refreshPage, 150);
         return true;
       }
     });

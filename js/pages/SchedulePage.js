@@ -1,7 +1,7 @@
 var SchedulePage = (function() {
   var selectedDate = new Date();
   var filterType = 'all';
-  var pageInstance = null;
+  var showBoard = false;
 
   function getScheduleMap() {
     var schedules = Store.getState().schedules;
@@ -41,6 +41,7 @@ var SchedulePage = (function() {
       case 'approved': return '已审批';
       case 'draft': return '草稿';
       case 'cancelled': return '已取消';
+      case 'ready': return '可执行';
       default: return status;
     }
   }
@@ -49,6 +50,7 @@ var SchedulePage = (function() {
     switch (status) {
       case 'confirmed':
       case 'approved':
+      case 'ready':
         return 'success';
       case 'pending': return 'warning';
       case 'draft': return 'default';
@@ -89,6 +91,190 @@ var SchedulePage = (function() {
     });
 
     return conflicts;
+  }
+
+  function getFilingStatus(scheduleId) {
+    var filings = Store.getState().filings;
+    for (var i = 0; i < filings.length; i++) {
+      if (filings[i].scheduleId === scheduleId) {
+        return filings[i];
+      }
+    }
+    return null;
+  }
+
+  function getApprovalStatus(schedule) {
+    if (!schedule.approvalId) return { label: '未发起', type: 'default', done: false, missing: true };
+    var approval = Store.getApprovalById(schedule.approvalId);
+    if (!approval) return { label: '未发起', type: 'default', done: false, missing: true };
+    switch (approval.status) {
+      case 'approved': return { label: '审批通过', type: 'success', done: true, missing: false };
+      case 'rejected': return { label: '已驳回', type: 'error', done: false, missing: false };
+      case 'pending': return { label: '审批中', type: 'warning', done: false, missing: false };
+      case 'draft': return { label: '草稿未提交', type: 'default', done: false, missing: false };
+      default: return { label: approval.status, type: 'default', done: false, missing: false };
+    }
+  }
+
+  function getAirspaceStatus(schedule) {
+    var filing = getFilingStatus(schedule.id);
+    if (!filing) return { label: '未报备', type: 'default', done: false, missing: true };
+    switch (filing.status) {
+      case 'approved': return { label: '空域通过', type: 'success', done: true, missing: false };
+      case 'pending':
+      case 'reviewing': return { label: '报备中', type: 'warning', done: false, missing: false };
+      case 'rejected': return { label: '已驳回', type: 'error', done: false, missing: false };
+      case 'draft': return { label: '草稿未提交', type: 'default', done: false, missing: false };
+      default: return { label: filing.status, type: 'default', done: false, missing: false };
+    }
+  }
+
+  function getExecStatus(schedule) {
+    if (schedule.status === 'cancelled') return { label: '已取消', type: 'error', ready: false };
+    var a = getApprovalStatus(schedule);
+    var f = getAirspaceStatus(schedule);
+    var conflicts = schedule.fleetId ? checkConflicts(schedule.fleetId, schedule.startTime, schedule.endTime, schedule.id) : [];
+    var hasConflict = conflicts.length > 0;
+
+    if (a.done && f.done && !hasConflict) {
+      return { label: '✓ 可执行', type: 'success', ready: true, conflicts: conflicts };
+    }
+    if (hasConflict) {
+      return { label: '⚡ 档期冲突', type: 'error', ready: false, conflicts: conflicts };
+    }
+    var missing = [];
+    if (!a.done) missing.push(a.label);
+    if (!f.done) missing.push(f.label);
+    return {
+      label: '⚠ ' + missing.join(' + '),
+      type: 'warning',
+      ready: false,
+      conflicts: conflicts,
+      missing: missing
+    };
+  }
+
+  function renderExecutionBoard() {
+    var state = Store.getState();
+    var now = new Date();
+    now.setHours(23, 59, 59, 999);
+    var futureLimit = new Date(now.getTime() + 90 * 24 * 3600 * 1000);
+
+    var performances = state.schedules.filter(function(s) {
+      if (s.type !== 'performance') return false;
+      if (s.status === 'cancelled') return false;
+      var t = new Date(s.startTime).getTime();
+      return t >= now.getTime() && t <= futureLimit.getTime();
+    }).sort(function(a, b) {
+      return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+    });
+
+    var stats = { ready: 0, partial: 0, conflict: 0 };
+    performances.forEach(function(p) {
+      var s = getExecStatus(p);
+      if (s.ready) stats.ready++;
+      else if (s.conflicts && s.conflicts.length > 0) stats.conflict++;
+      else stats.partial++;
+    });
+
+    var wrapper = document.createElement('div');
+    wrapper.className = 'route-config-card';
+    wrapper.style.marginBottom = 'var(--spacing-md)';
+    wrapper.style.padding = 'var(--spacing-md)';
+    wrapper.style.background = 'linear-gradient(135deg, #1677ff 0%, #36bffa 100%)';
+    wrapper.style.color = '#fff';
+
+    var header = document.createElement('div');
+    header.className = 'flex-between';
+    header.style.marginBottom = 'var(--spacing-md)';
+    header.innerHTML =
+      '<div>' +
+      '<div style="font-size:var(--font-size-lg);font-weight:var(--font-weight-semibold)">🎯 演出执行看板</div>' +
+      '<div style="font-size:var(--font-size-sm);opacity:0.85">未来 90 天待执行演出</div>' +
+      '</div>' +
+      '<div class="grid-3" style="gap:12px;min-width:160px">' +
+      '<div style="text-align:center;background:rgba(255,255,255,0.15);border-radius:var(--radius-sm);padding:6px 8px"><div style="font-weight:bold;font-size:18px">' + stats.ready + '</div><div style="font-size:10px;opacity:0.85">可执行</div></div>' +
+      '<div style="text-align:center;background:rgba(255,255,255,0.15);border-radius:var(--radius-sm);padding:6px 8px"><div style="font-weight:bold;font-size:18px">' + stats.partial + '</div><div style="font-size:10px;opacity:0.85">待完善</div></div>' +
+      '<div style="text-align:center;background:rgba(255,77,79,0.3);border-radius:var(--radius-sm);padding:6px 8px"><div style="font-weight:bold;font-size:18px">' + stats.conflict + '</div><div style="font-size:10px;opacity:0.85">有冲突</div></div>' +
+      '</div>';
+    wrapper.appendChild(header);
+
+    if (performances.length === 0) {
+      var empty = document.createElement('div');
+      empty.style.textAlign = 'center';
+      empty.style.padding = 'var(--spacing-lg) 0';
+      empty.style.opacity = '0.7';
+      empty.textContent = '暂无待执行演出';
+      wrapper.appendChild(empty);
+    } else {
+      performances.slice(0, 5).forEach(function(p) {
+        var exec = getExecStatus(p);
+        var a = getApprovalStatus(p);
+        var f = getAirspaceStatus(p);
+
+        var row = document.createElement('div');
+        row.style.padding = '10px';
+        row.style.marginBottom = '8px';
+        row.style.background = 'rgba(255,255,255,0.12)';
+        row.style.borderRadius = 'var(--radius-md)';
+        row.style.cursor = 'pointer';
+        row.onclick = function() {
+          var d = new Date(p.startTime);
+          selectedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+          showBoard = false;
+          refreshPage(selectedDate);
+          setTimeout(function() {
+            showScheduleDetail(p);
+          }, 200);
+        };
+
+        var top = document.createElement('div');
+        top.className = 'flex-between';
+        top.style.marginBottom = '6px';
+        top.innerHTML =
+          '<div style="font-weight:var(--font-weight-semibold);font-size:var(--font-size-base)">' + p.title + '</div>' +
+          '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:' +
+            (exec.ready ? '#23c343' : (exec.conflicts && exec.conflicts.length > 0 ? '#f53f3f' : '#ff9a2e')) +
+            ';color:#fff">' + exec.label + '</span>';
+        row.appendChild(top);
+
+        var mid = document.createElement('div');
+        mid.className = 'flex-between';
+        mid.style.fontSize = '11px';
+        mid.style.opacity = '0.9';
+        mid.innerHTML =
+          '<div>📅 ' + DateUtils.formatDate(p.startTime, 'MM-DD ww') + ' ' +
+            DateUtils.formatDate(p.startTime, 'HH:mm') + '-' + DateUtils.formatDate(p.endTime, 'HH:mm') + '</div>' +
+          '<div>🚁 ' + (p.fleetName || '-') + '</div>';
+        row.appendChild(mid);
+
+        var tags = document.createElement('div');
+        tags.style.marginTop = '6px';
+        tags.style.fontSize = '10px';
+        tags.innerHTML =
+          '<span style="padding:2px 6px;border-radius:8px;background:rgba(255,255,255,0.15);margin-right:4px">' +
+            (a.done ? '✓ ' : '○ ') + a.label + '</span>' +
+          '<span style="padding:2px 6px;border-radius:8px;background:rgba(255,255,255,0.15);margin-right:4px">' +
+            (f.done ? '✓ ' : '○ ') + f.label + '</span>' +
+          (exec.conflicts && exec.conflicts.length > 0 ?
+            '<span style="padding:2px 6px;border-radius:8px;background:rgba(245,63,63,0.5);margin-right:4px">⚡ ' + exec.conflicts.length + '冲突</span>' : '');
+        row.appendChild(tags);
+
+        wrapper.appendChild(row);
+      });
+
+      if (performances.length > 5) {
+        var more = document.createElement('div');
+        more.style.textAlign = 'center';
+        more.style.paddingTop = '4px';
+        more.style.fontSize = 'var(--font-size-sm)';
+        more.style.opacity = '0.8';
+        more.textContent = '还有 ' + (performances.length - 5) + ' 场演出...';
+        wrapper.appendChild(more);
+      }
+    }
+
+    return wrapper;
   }
 
   function renderScheduleItem(schedule) {
@@ -142,9 +328,31 @@ var SchedulePage = (function() {
 
     info.appendChild(desc);
 
+    if (schedule.type === 'performance') {
+      var exec = getExecStatus(schedule);
+      var execBar = document.createElement('div');
+      execBar.style.marginTop = '6px';
+      execBar.style.fontSize = '11px';
+      execBar.style.padding = '3px 8px';
+      execBar.style.borderRadius = 'var(--radius-sm)';
+      execBar.style.display = 'inline-block';
+      if (exec.ready) {
+        execBar.style.background = 'var(--color-success-bg)';
+        execBar.style.color = 'var(--color-success)';
+      } else if (exec.conflicts && exec.conflicts.length > 0) {
+        execBar.style.background = 'var(--color-error-bg)';
+        execBar.style.color = 'var(--color-error)';
+      } else {
+        execBar.style.background = 'var(--color-warning-bg)';
+        execBar.style.color = 'var(--color-warning)';
+      }
+      execBar.textContent = exec.label;
+      info.appendChild(execBar);
+    }
+
     if (schedule.approvalId) {
       var approval = Store.getApprovalById(schedule.approvalId);
-      if (approval) {
+      if (approval && approval.totalSteps > 0) {
         var approvalBar = document.createElement('div');
         approvalBar.className = 'approval-progress';
         approvalBar.style.marginTop = 'var(--spacing-xs)';
@@ -182,6 +390,34 @@ var SchedulePage = (function() {
     }
   }
 
+  function getFleetDayAdjacents(schedule) {
+    if (!schedule.fleetId) return [];
+    var dateKey = DateUtils.formatDate(schedule.startTime, 'YYYY-MM-DD');
+    var all = Store.getSchedulesByDate(dateKey);
+    var list = [];
+    all.forEach(function(s) {
+      if (s.id === schedule.id) return;
+      if (s.fleetId !== schedule.fleetId) return;
+      if (s.status === 'cancelled') return;
+      var s1 = new Date(schedule.startTime).getTime();
+      var s2 = new Date(schedule.endTime).getTime();
+      var e1 = new Date(s.startTime).getTime();
+      var e2 = new Date(s.endTime).getTime();
+      if (s1 < e2 && s2 > e1) {
+        list.push({ schedule: s, relation: 'overlap' });
+      } else {
+        var gapMin = Math.min(Math.abs(s1 - e2), Math.abs(s2 - e1));
+        if (gapMin / 60000 <= 120) {
+          list.push({ schedule: s, relation: gapMin < 60000 ? 'tight' : 'adjacent' });
+        }
+      }
+    });
+    list.sort(function(a, b) {
+      return new Date(a.schedule.startTime).getTime() - new Date(b.schedule.startTime).getTime();
+    });
+    return list;
+  }
+
   function showScheduleDetail(schedule) {
     var content = document.createElement('div');
 
@@ -196,8 +432,13 @@ var SchedulePage = (function() {
     var statusRow = document.createElement('div');
     statusRow.className = 'detail-row';
     statusRow.innerHTML = '<div class="detail-label">状态</div><div class="detail-value"></div>';
+    var displayStatus = schedule.status;
+    if (schedule.type === 'performance') {
+      var exec = getExecStatus(schedule);
+      if (exec.ready) displayStatus = 'ready';
+    }
     statusRow.querySelector('.detail-value').appendChild(
-      Tag.create(getStatusLabel(schedule.status), getStatusTagType(schedule.status))
+      Tag.create(getStatusLabel(displayStatus), getStatusTagType(displayStatus))
     );
     content.appendChild(statusRow);
 
@@ -224,6 +465,61 @@ var SchedulePage = (function() {
       content.appendChild(locRow);
     }
 
+    if (schedule.type === 'performance') {
+      var exec2 = getExecStatus(schedule);
+      var a = getApprovalStatus(schedule);
+      var f = getAirspaceStatus(schedule);
+
+      var approvalDivider = document.createElement('div');
+      approvalDivider.className = 'divider';
+      content.appendChild(approvalDivider);
+
+      var execSummary = document.createElement('div');
+      execSummary.style.padding = 'var(--spacing-sm) var(--spacing-md)';
+      execSummary.style.borderRadius = 'var(--radius-md)';
+      execSummary.style.marginBottom = 'var(--spacing-sm)';
+      if (exec2.ready) {
+        execSummary.style.background = 'var(--color-success-bg)';
+        execSummary.style.color = 'var(--color-success)';
+        execSummary.innerHTML = '✅ ' + exec2.label;
+      } else if (exec2.conflicts && exec2.conflicts.length > 0) {
+        execSummary.style.background = 'var(--color-error-bg)';
+        execSummary.style.color = 'var(--color-error)';
+        execSummary.innerHTML = '⚡ 档期存在 ' + exec2.conflicts.length + ' 处冲突，请调整时间';
+      } else {
+        execSummary.style.background = 'var(--color-warning-bg)';
+        execSummary.style.color = 'var(--color-warning)';
+        execSummary.innerHTML = '⚠️ 待完善：' + exec2.missing.join('、');
+      }
+      content.appendChild(execSummary);
+
+      var checklist = document.createElement('div');
+      checklist.className = 'flex';
+      checklist.style.gap = 'var(--spacing-md)';
+      checklist.style.marginBottom = 'var(--spacing-sm)';
+
+      var apCheck = document.createElement('div');
+      apCheck.style.flex = '1';
+      apCheck.style.padding = 'var(--spacing-sm)';
+      apCheck.style.borderRadius = 'var(--radius-md)';
+      apCheck.style.background = a.done ? 'var(--color-success-bg)' : 'var(--color-bg-gray)';
+      apCheck.innerHTML =
+        '<div style="font-size:var(--font-size-sm);color:' + (a.done ? 'var(--color-success)' : 'var(--color-text-secondary)') + '">' +
+        (a.done ? '✓ ' : '○ ') + '<b>审批</b> · ' + a.label + '</div>';
+      checklist.appendChild(apCheck);
+
+      var fsCheck = document.createElement('div');
+      fsCheck.style.flex = '1';
+      fsCheck.style.padding = 'var(--spacing-sm)';
+      fsCheck.style.borderRadius = 'var(--radius-md)';
+      fsCheck.style.background = f.done ? 'var(--color-success-bg)' : 'var(--color-bg-gray)';
+      fsCheck.innerHTML =
+        '<div style="font-size:var(--font-size-sm);color:' + (f.done ? 'var(--color-success)' : 'var(--color-text-secondary)') + '">' +
+        (f.done ? '✓ ' : '○ ') + '<b>空域</b> · ' + f.label + '</div>';
+      checklist.appendChild(fsCheck);
+      content.appendChild(checklist);
+    }
+
     if (schedule.approvalId) {
       var approval = Store.getApprovalById(schedule.approvalId);
       if (approval) {
@@ -234,34 +530,11 @@ var SchedulePage = (function() {
         var approvalTitle = document.createElement('div');
         approvalTitle.style.fontWeight = 'var(--font-weight-medium)';
         approvalTitle.style.marginBottom = 'var(--spacing-sm)';
-        approvalTitle.textContent = '关联审批';
+        approvalTitle.textContent = '关联审批流程';
         content.appendChild(approvalTitle);
 
         var flowEl = ApprovalFlow.create(approval.steps);
         content.appendChild(flowEl);
-
-        if (approval.status === 'approved') {
-          var passTip = document.createElement('div');
-          passTip.className = 'text-success';
-          passTip.style.fontSize = 'var(--font-size-sm)';
-          passTip.style.marginTop = 'var(--spacing-sm)';
-          passTip.textContent = '✅ 审批已通过，此演出可执行';
-          content.appendChild(passTip);
-        } else if (approval.status === 'rejected') {
-          var rejTip = document.createElement('div');
-          rejTip.className = 'text-error';
-          rejTip.style.fontSize = 'var(--font-size-sm)';
-          rejTip.style.marginTop = 'var(--spacing-sm)';
-          rejTip.textContent = '⚠️ 审批已驳回，此演出暂不可执行';
-          content.appendChild(rejTip);
-        } else if (approval.status === 'pending') {
-          var pendTip = document.createElement('div');
-          pendTip.className = 'text-warning';
-          pendTip.style.fontSize = 'var(--font-size-sm)';
-          pendTip.style.marginTop = 'var(--spacing-sm)';
-          pendTip.textContent = '⏳ 审批进行中，暂不可执行';
-          content.appendChild(pendTip);
-        }
       }
     }
 
@@ -272,8 +545,52 @@ var SchedulePage = (function() {
       var tip2 = document.createElement('div');
       tip2.className = 'text-secondary';
       tip2.style.fontSize = 'var(--font-size-sm)';
-      tip2.textContent = '💡 此表演尚未发起审批，请前往分支审批模块发起报批';
+      tip2.textContent = '💡 此表演尚未发起审批，请前往「分支审批」模块点「+ 发起审批」';
       content.appendChild(tip2);
+    }
+
+    var adjacents = schedule.fleetId ? getFleetDayAdjacents(schedule) : [];
+    if (adjacents.length > 0) {
+      var dividerAdj = document.createElement('div');
+      dividerAdj.className = 'divider';
+      content.appendChild(dividerAdj);
+
+      var adjTitle = document.createElement('div');
+      adjTitle.style.fontWeight = 'var(--font-weight-medium)';
+      adjTitle.style.marginBottom = 'var(--spacing-sm)';
+      adjTitle.innerHTML = '🚁 ' + schedule.fleetName + ' 当天相邻/冲突占用（' + adjacents.length + ' 条）';
+      content.appendChild(adjTitle);
+
+      adjacents.forEach(function(item) {
+        var row = document.createElement('div');
+        row.className = 'flex-between';
+        row.style.padding = 'var(--spacing-sm) 0';
+        row.style.borderBottom = '1px solid var(--color-border-light)';
+        row.style.cursor = 'pointer';
+        var colorTag = '';
+        var label = '';
+        if (item.relation === 'overlap') { colorTag = 'var(--color-error)'; label = '冲突'; }
+        else if (item.relation === 'tight') { colorTag = 'var(--color-warning)'; label = '间隔<1h'; }
+        else { colorTag = 'var(--color-text-tertiary)'; label = '间隔<2h'; }
+        row.innerHTML =
+          '<div>' +
+          '<div style="font-weight:var(--font-weight-medium)">' + item.schedule.title + '</div>' +
+          '<div style="font-size:var(--font-size-xs);color:var(--color-text-secondary)">' +
+          getTypeLabel(item.schedule.type) + ' · ' +
+          DateUtils.formatDate(item.schedule.startTime, 'HH:mm') + ' - ' +
+          DateUtils.formatDate(item.schedule.endTime, 'HH:mm') +
+          '</div>' +
+          '</div>' +
+          '<span style="color:' + colorTag + ';font-size:var(--font-size-xs)">' + label + '</span>';
+        row.onclick = function() {
+          Modal.hide();
+          var d = new Date(item.schedule.startTime);
+          selectedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+          refreshPage(selectedDate);
+          setTimeout(function() { showScheduleDetail(item.schedule); }, 150);
+        };
+        content.appendChild(row);
+      });
     }
 
     if (schedule.isFromCycle) {
@@ -303,7 +620,10 @@ var SchedulePage = (function() {
           function() {
             Store.deleteSchedule(schedule.id);
             CommonUtils.showToast('已删除');
-            refreshPage(selectedDate);
+            Modal.hideAll();
+            setTimeout(function() {
+              refreshPage(selectedDate);
+            }, 150);
             return true;
           }
         );
@@ -365,11 +685,6 @@ var SchedulePage = (function() {
       '<label class="form-label">地点</label>' +
       '<input type="text" class="form-input" id="edit-location" value="' + (schedule.location || '') + '">';
     content.appendChild(locationItem);
-
-    var conflictHint = document.createElement('div');
-    conflictHint.id = 'conflict-hint';
-    conflictHint.style.display = 'none';
-    content.appendChild(conflictHint);
 
     Modal.show({
       title: '编辑排期',
@@ -448,12 +763,15 @@ var SchedulePage = (function() {
     });
 
     CommonUtils.showToast('保存成功');
+    Modal.hideAll();
     var targetDate = new Date(
       newStart.getFullYear(),
       newStart.getMonth(),
       newStart.getDate()
     );
-    refreshPage(targetDate);
+    setTimeout(function() {
+      refreshPage(targetDate);
+    }, 150);
   }
 
   function showConflictDialog(conflicts, callback) {
@@ -492,7 +810,8 @@ var SchedulePage = (function() {
       cancelText: '取消',
       showCancel: true,
       onConfirm: function() {
-        callback(true);
+        Modal.hideAll();
+        setTimeout(function() { callback(true); }, 150);
         return true;
       },
       onCancel: function() {
@@ -525,9 +844,20 @@ var SchedulePage = (function() {
 
     var pageHeader = document.createElement('div');
     pageHeader.className = 'page-header';
-    pageHeader.innerHTML = '<div class="page-title">表演排期</div>' +
-      '<div class="page-subtitle">查看和管理无人机表演与排练日程</div>';
+    pageHeader.innerHTML =
+      '<div class="flex-between">' +
+      '<div>' +
+      '<div class="page-title">表演排期</div>' +
+      '<div class="page-subtitle">查看和管理无人机表演与排练日程</div>' +
+      '</div>' +
+      '<span id="toggle-board-btn" class="section-title-extra" style="cursor:pointer;background:var(--color-primary);color:#fff;padding:4px 10px;border-radius:20px;font-size:12px;line-height:18px">' +
+        (showBoard ? '收起看板' : '🎯 执行看板') + '</span>' +
+      '</div>';
     page.appendChild(pageHeader);
+
+    if (showBoard) {
+      page.appendChild(renderExecutionBoard());
+    }
 
     var calendarEl = Calendar.create({
       date: selectedDate,
@@ -585,14 +915,21 @@ var SchedulePage = (function() {
 
     renderScheduleList();
 
-    var addBtn = document.getElementById('add-schedule-btn');
-    if (addBtn) {
-      addBtn.onclick = function() {
-        CommonUtils.showToast('新建排期功能开发中');
-      };
-    }
-
-    pageInstance = container;
+    setTimeout(function() {
+      var toggleBtn = document.getElementById('toggle-board-btn');
+      if (toggleBtn) {
+        toggleBtn.onclick = function() {
+          showBoard = !showBoard;
+          refreshPage(selectedDate);
+        };
+      }
+      var addBtn = document.getElementById('add-schedule-btn');
+      if (addBtn) {
+        addBtn.onclick = function() {
+          CommonUtils.showToast('新建排期功能开发中');
+        };
+      }
+    }, 0);
   }
 
   function renderScheduleList() {
