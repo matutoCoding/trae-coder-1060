@@ -200,8 +200,19 @@ var FilingPage = (function() {
     var filing = Store.getFilingById(id);
     if (!filing) return;
 
+    Store.updateFiling(id, {
+      status: 'pending',
+      applyTime: new Date().toISOString()
+    });
+
     CommonUtils.showToast('已提交空域审批');
-    renderFilingList();
+    if (typeof render === 'function') {
+      var mainContent = document.getElementById('main-content');
+      if (mainContent) {
+        mainContent.innerHTML = '';
+        render(mainContent);
+      }
+    }
   }
 
   function renderFilingList() {

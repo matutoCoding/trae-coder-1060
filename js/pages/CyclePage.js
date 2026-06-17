@@ -209,6 +209,13 @@ var CyclePage = (function() {
     return card;
   }
 
+  function refreshPage() {
+    var mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+    mainContent.innerHTML = '';
+    render(mainContent);
+  }
+
   function toggleRuleStatus(ruleId) {
     var rule = Store.getCycleRuleById(ruleId);
     if (!rule) return;
@@ -217,7 +224,7 @@ var CyclePage = (function() {
     Store.updateCycleRule(ruleId, { status: newStatus });
 
     CommonUtils.showToast(rule.name + ' 已' + (newStatus === 'active' ? '启用' : '停用'));
-    renderRuleList();
+    refreshPage();
   }
 
   function showRuleDetail(rule) {
@@ -355,11 +362,12 @@ var CyclePage = (function() {
 
         var occupancies = Store.generateCycleOccupancies(rule.id, startDate, endDate);
 
-        occupancies.forEach(function(occ) {
-          Store.addSchedule(occ);
-        });
+        if (occupancies.length > 0) {
+          Store.addSchedulesBatch(occupancies);
+        }
 
         CommonUtils.showToast('成功生成 ' + occupancies.length + ' 条排期');
+        refreshPage();
         return true;
       }
     });

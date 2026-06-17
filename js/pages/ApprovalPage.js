@@ -224,7 +224,7 @@ var ApprovalPage = (function() {
     });
 
     CommonUtils.showToast(newStatus === 'approved' ? '审批已通过' : '已通过，进入下一环节');
-    renderApprovalList();
+    refreshPage();
   }
 
   function rejectApproval(id) {
@@ -251,7 +251,7 @@ var ApprovalPage = (function() {
     });
 
     CommonUtils.showToast('已拒绝');
-    renderApprovalList();
+    refreshPage();
   }
 
   function renderRouteConfigCard(config) {
@@ -397,9 +397,180 @@ var ApprovalPage = (function() {
     Modal.show({
       title: config.name,
       content: content,
-      confirmText: '关闭',
-      showCancel: false
+      confirmText: '编辑',
+      cancelText: '关闭',
+      showCancel: true,
+      onConfirm: function() {
+        showRouteConfigEdit(config);
+        return true;
+      }
     });
+  }
+
+  function showRouteConfigEdit(config) {
+    var content = document.createElement('div');
+
+    var nameItem = document.createElement('div');
+    nameItem.className = 'form-item';
+    nameItem.innerHTML =
+      '<label class="form-label">规则名称</label>' +
+      '<input type="text" class="form-input" id="route-edit-name" value="' + (config.name || '') + '">';
+    content.appendChild(nameItem);
+
+    var descItem = document.createElement('div');
+    descItem.className = 'form-item';
+    descItem.innerHTML =
+      '<label class="form-label">描述</label>' +
+      '<input type="text" class="form-input" id="route-edit-desc" value="' + (config.description || '') + '">';
+    content.appendChild(descItem);
+
+    var condTitle = document.createElement('div');
+    condTitle.className = 'form-label';
+    condTitle.textContent = '路由条件';
+    content.appendChild(condTitle);
+
+    var scaleItem = document.createElement('div');
+    scaleItem.className = 'form-item';
+    var curScale = config.conditions.scale || '';
+    scaleItem.innerHTML =
+      '<label class="form-label">表演规模</label>' +
+      '<select class="form-select" id="route-edit-scale">' +
+      '<option value="">不限制</option>' +
+      '<option value="small"' + (curScale === 'small' ? ' selected' : '') + '>小型</option>' +
+      '<option value="medium"' + (curScale === 'medium' ? ' selected' : '') + '>中型</option>' +
+      '<option value="large"' + (curScale === 'large' ? ' selected' : '') + '>大型</option>' +
+      '</select>';
+    content.appendChild(scaleItem);
+
+    var specialItem = document.createElement('div');
+    specialItem.className = 'form-item';
+    var curSpecial = config.conditions.isSpecial === true;
+    specialItem.innerHTML =
+      '<label class="form-label">特殊场地</label>' +
+      '<select class="form-select" id="route-edit-special">' +
+      '<option value="">不限制</option>' +
+      '<option value="true"' + (curSpecial ? ' selected' : '') + '>是（需民航局审批）</option>' +
+      '<option value="false"' + (!curSpecial && config.conditions.hasOwnProperty('isSpecial') ? ' selected' : '') + '>否</option>' +
+      '</select>';
+    content.appendChild(specialItem);
+
+    var stepsTitle = document.createElement('div');
+    stepsTitle.className = 'form-label';
+    stepsTitle.innerHTML =
+      '审批环节 <span class="text-secondary" style="font-weight: normal">(当前 ' + config.steps.length + ' 步)</span>' +
+      '<span class="section-title-extra" id="route-add-step" style="cursor:pointer">+ 添加环节</span>';
+    content.appendChild(stepsTitle);
+
+    var stepsContainer = document.createElement('div');
+    stepsContainer.id = 'route-steps-container';
+    content.appendChild(stepsContainer);
+
+    var stepTemplates = config.steps.map(function(step) {
+      return { name: step.name, role: step.role };
+    });
+
+    function renderSteps() {
+      stepsContainer.innerHTML = '';
+      stepTemplates.forEach(function(st, idx) {
+        var row = document.createElement('div');
+        row.className = 'flex';
+        row.style.gap = 'var(--spacing-sm)';
+        row.style.alignItems = 'center';
+        row.style.marginBottom = 'var(--spacing-sm)';
+        row.innerHTML =
+          '<span style="color: var(--color-text-tertiary);width:20px">' + (idx + 1) + '</span>' +
+          '<input type="text" class="form-input step-name" style="flex:1" placeholder="环节名称" value="' + st.name + '">' +
+          '<select class="form-select step-role" style="width:140px">' +
+          '<option value="project_manager"' + (st.role === 'project_manager' ? ' selected' : '') + '>项目主管</option>' +
+          '<option value="operation_director"' + (st.role === 'operation_director' ? ' selected' : '') + '>运营总监</option>' +
+          '<option value="general_manager"' + (st.role === 'general_manager' ? ' selected' : '') + '>总经理</option>' +
+          '<option value="civil_aviation"' + (st.role === 'civil_aviation' ? ' selected' : '') + '>民航局</option>' +
+          '</select>' +
+          '<span class="text-error" style="cursor:pointer;padding:0 8px" data-idx="' + idx + '">✕</span>';
+        stepsContainer.appendChild(row);
+      });
+
+      stepsContainer.querySelectorAll('[data-idx]').forEach(function(el) {
+        el.onclick = function() {
+          var idx = parseInt(el.dataset.idx);
+          stepTemplates.splice(idx, 1);
+          renderSteps();
+        };
+      });
+    }
+    renderSteps();
+
+    Modal.show({
+      title: '编辑审批流程',
+      content: content,
+      confirmText: '保存',
+      cancelText: '取消',
+      showCancel: true,
+      onConfirm: function() {
+        var nameVal = document.getElementById('route-edit-name').value.trim();
+        var descVal = document.getElementById('route-edit-desc').value.trim();
+        var scaleVal = document.getElementById('route-edit-scale').value;
+        var specialVal = document.getElementById('route-edit-special').value;
+
+        if (!nameVal) {
+          CommonUtils.showToast('请输入规则名称');
+          return false;
+        }
+
+        var stepInputs = stepsContainer.querySelectorAll('.step-name');
+        var roleInputs = stepsContainer.querySelectorAll('.step-role');
+        var newSteps = [];
+        for (var i = 0; i < stepInputs.length; i++) {
+          var n = stepInputs[i].value.trim();
+          if (!n) {
+            CommonUtils.showToast('请填写所有审批环节名称');
+            return false;
+          }
+          newSteps.push({
+            id: i + 1,
+            name: n,
+            role: roleInputs[i].value
+          });
+        }
+
+        if (newSteps.length === 0) {
+          CommonUtils.showToast('请至少添加一个审批环节');
+          return false;
+        }
+
+        var newConditions = {};
+        if (scaleVal) newConditions.scale = scaleVal;
+        if (specialVal) newConditions.isSpecial = specialVal === 'true';
+
+        Store.updateRouteConfig(config.id, {
+          name: nameVal,
+          description: descVal,
+          conditions: newConditions,
+          steps: newSteps
+        });
+
+        CommonUtils.showToast('保存成功');
+        refreshPage();
+        return true;
+      }
+    });
+
+    setTimeout(function() {
+      var addBtn = document.getElementById('route-add-step');
+      if (addBtn) {
+        addBtn.onclick = function() {
+          stepTemplates.push({ name: '', role: 'project_manager' });
+          renderSteps();
+        };
+      }
+    }, 50);
+  }
+
+  function refreshPage() {
+    var mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+    mainContent.innerHTML = '';
+    render(mainContent);
   }
 
   function renderApprovalList() {
@@ -440,20 +611,105 @@ var ApprovalPage = (function() {
 
     listEl.innerHTML = '';
 
-    var configs = Store.getState().routeConfigs;
+    var testCard = document.createElement('div');
+    testCard.className = 'route-config-card';
+    testCard.style.border = '2px dashed var(--color-primary)';
+    testCard.style.background = 'var(--color-primary-bg)';
 
-    if (configs.length === 0) {
-      var empty = document.createElement('div');
-      empty.className = 'empty';
-      empty.innerHTML = '<div class="empty-icon">🔀</div><div class="empty-text">暂无路由配置</div>';
-      listEl.appendChild(empty);
-      return;
-    }
+    var testHeader = document.createElement('div');
+    testHeader.className = 'flex-between';
+    testHeader.style.marginBottom = 'var(--spacing-md)';
+    testHeader.innerHTML =
+      '<div style="font-weight:var(--font-weight-semibold)">🧪 测试路由匹配测试</div>' +
+      '<span class="section-title-extra" id="test-route-btn">开始测试</span>';
+    testCard.appendChild(testHeader);
+
+    var testDesc = document.createElement('div');
+    testDesc.className = 'text-secondary';
+    testDesc.style.fontSize = 'var(--font-size-sm)';
+    testDesc.textContent = '选择表演规模和场地，验证系统会自动选择哪条审批链（多条件优先匹配）';
+    testCard.appendChild(testDesc);
+
+    listEl.appendChild(testCard);
+
+    var configs = Store.getState().routeConfigs;
 
     configs.forEach(function(config) {
       var card = renderRouteConfigCard(config);
       listEl.appendChild(card);
     });
+
+    setTimeout(function() {
+      var btn = document.getElementById('test-route-btn');
+      if (btn) {
+        btn.onclick = showRouteMatchTest;
+      }
+    }, 0);
+  }
+
+  function showRouteMatchTest() {
+    var content = document.createElement('div');
+
+    content.innerHTML =
+      '<div class="form-item">' +
+      '<label class="form-label">表演规模</label>' +
+      '<select class="form-select" id="test-scale">' +
+      '<option value="small">小型</option>' +
+      '<option value="medium">中型</option>' +
+      '<option value="large" selected>大型</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="form-item">' +
+      '<label class="form-label">特殊场地（天安门/机场等需民航局审批）</label>' +
+      '<select class="form-select" id="test-special">' +
+      '<option value="false" selected>否（普通场地）</option>' +
+      '<option value="true">是（特殊场地）</option>' +
+      '</select>' +
+      '</div>' +
+      '<div id="test-result" style="padding:var(--spacing-lg);background:var(--color-bg-gray);border-radius:var(--radius-md);text-align:center"></div>';
+
+    Modal.show({
+      title: '条件路由匹配测试',
+      content: content,
+      confirmText: '关闭',
+      showCancel: false
+    });
+
+    setTimeout(function() {
+      var s1 = document.getElementById('test-scale');
+      var s2 = document.getElementById('test-special');
+      if (s1) s1.onchange = calcMatch;
+      if (s2) s2.onchange = calcMatch;
+      calcMatch();
+    }, 50);
+  }
+
+  function calcMatch() {
+    var s1 = document.getElementById('test-scale');
+    var s2 = document.getElementById('test-special');
+    var res = document.getElementById('test-result');
+    if (!s1 || !s2 || !res) return;
+    var cond = {
+      scale: document.getElementById('test-scale').value,
+      isSpecial: document.getElementById('test-special').value === 'true'
+    };
+    var matched = Store.getRouteConfigByCondition(cond);
+    if (matched) {
+      var html = '<div style="font-size:var(--font-size-lg);font-weight:var(--font-weight-semibold);color:var(--color-primary);margin-bottom:var(--spacing-sm)">✅ 匹配：' + matched.name + '</div>';
+      html += '<div class="text-secondary" style="font-size:var(--font-size-sm);margin-bottom:var(--spacing-md)">' + matched.description + '</div>';
+      html += '<div style="text-align:left">';
+      matched.steps.forEach(function (step, idx) {
+        html += '<div class="flex-between" style="padding:var(--spacing-xs)0;border-bottom:1px solid var(--color-border-light)">' +
+          '<span>' + (idx + 1) + '. ' + step.name + '</span>' +
+          '<span class="text-secondary">' + getRoleLabel(step.role) + '</span>' +
+          '</div>';
+      });
+      html += '</div>';
+      html += '<div class="text-tertiary" style="font-size:var(--font-size-xs);margin-top:var(--spacing-md)">条件数: ' + Object.keys(matched.conditions).length + ' 个</div>';
+      document.getElementById('test-result').innerHTML = html;
+    } else {
+      document.getElementById('test-result').innerHTML = '<div class="text-error">未匹配到任何流程</div>';
+    }
   }
 
   function render(container) {

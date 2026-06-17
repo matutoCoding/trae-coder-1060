@@ -187,12 +187,168 @@ var SchedulePage = (function() {
       content.appendChild(descRow);
     }
 
+    if (schedule.isFromCycle) {
+      var divider = document.createElement('div');
+      divider.className = 'divider';
+      content.appendChild(divider);
+      var tip = document.createElement('div');
+      tip.style.fontSize = 'var(--font-size-sm)';
+      tip.style.color = 'var(--color-text-tertiary)';
+      tip.textContent = '⚠️ 此排期由周期规则批量生成，编辑后将与规则解除关联';
+      content.appendChild(tip);
+    }
+
     Modal.show({
       title: schedule.title,
       content: content,
-      confirmText: '关闭',
-      showCancel: false
+      confirmText: '编辑',
+      cancelText: '删除',
+      showCancel: true,
+      onConfirm: function() {
+        showScheduleEdit(schedule);
+        return true;
+      },
+      onCancel: function() {
+        Modal.confirm(
+          '确定要删除此排期吗？删除后无法恢复。',
+          function() {
+            Store.deleteSchedule(schedule.id);
+            CommonUtils.showToast('已删除');
+            refreshPage();
+            return true;
+          }
+        );
+        return false;
+      }
     });
+  }
+
+  function showScheduleEdit(schedule) {
+    var content = document.createElement('div');
+
+    var titleItem = document.createElement('div');
+    titleItem.className = 'form-item';
+    titleItem.innerHTML =
+      '<label class="form-label">排期名称</label>' +
+      '<input type="text" class="form-input" id="edit-title" value="' + (schedule.title || '') + '">';
+    content.appendChild(titleItem);
+
+    var fleets = Store.getState().droneFleets;
+    var fleetOptions = fleets.map(function(f) {
+      return '<option value="' + f.id + '"' + (f.id === schedule.fleetId ? ' selected' : '') + '>' + f.name + '</option>';
+    }).join('');
+
+    var fleetItem = document.createElement('div');
+    fleetItem.className = 'form-item';
+    fleetItem.innerHTML =
+      '<label class="form-label">机阵</label>' +
+      '<select class="form-select" id="edit-fleet">' + fleetOptions + '</select>';
+    content.appendChild(fleetItem);
+
+    var startStr = DateUtils.formatDate(schedule.startTime, 'YYYY-MM-DD');
+    var startTimeStr = DateUtils.formatDate(schedule.startTime, 'HH:mm');
+    var endTimeStr = DateUtils.formatDate(schedule.endTime, 'HH:mm');
+
+    var dateItem = document.createElement('div');
+    dateItem.className = 'form-item';
+    dateItem.innerHTML =
+      '<label class="form-label">日期</label>' +
+      '<input type="date" class="form-input" id="edit-date" value="' + startStr + '">';
+    content.appendChild(dateItem);
+
+    var startTimeItem = document.createElement('div');
+    startTimeItem.className = 'form-item';
+    startTimeItem.innerHTML =
+      '<label class="form-label">开始时间</label>' +
+      '<input type="time" class="form-input" id="edit-start" value="' + startTimeStr + '">';
+    content.appendChild(startTimeItem);
+
+    var endTimeItem = document.createElement('div');
+    endTimeItem.className = 'form-item';
+    endTimeItem.innerHTML =
+      '<label class="form-label">结束时间</label>' +
+      '<input type="time" class="form-input" id="edit-end" value="' + endTimeStr + '">';
+    content.appendChild(endTimeItem);
+
+    var locationItem = document.createElement('div');
+    locationItem.className = 'form-item';
+    locationItem.innerHTML =
+      '<label class="form-label">地点</label>' +
+      '<input type="text" class="form-input" id="edit-location" value="' + (schedule.location || '') + '">';
+    content.appendChild(locationItem);
+
+    Modal.show({
+      title: '编辑排期',
+      content: content,
+      confirmText: '保存',
+      cancelText: '取消',
+      showCancel: true,
+      onConfirm: function() {
+        var titleVal = document.getElementById('edit-title').value.trim();
+        var fleetIdVal = document.getElementById('edit-fleet').value;
+        var dateVal = document.getElementById('edit-date').value;
+        var startVal = document.getElementById('edit-start').value;
+        var endVal = document.getElementById('edit-end').value;
+        var locationVal = document.getElementById('edit-location').value.trim();
+
+        if (!titleVal) {
+          CommonUtils.showToast('请输入排期名称');
+          return false;
+        }
+        if (!dateVal || !startVal || !endVal) {
+          CommonUtils.showToast('请选择完整时间');
+          return false;
+        }
+
+        var fleet = fleets.find(function(f) { return f.id === fleetIdVal; });
+        var startParts = startVal.split(':');
+        var endParts = endVal.split(':');
+        var dateParts = dateVal.split('-');
+
+        var newStart = new Date(
+          parseInt(dateParts[0]),
+          parseInt(dateParts[1]) - 1,
+          parseInt(dateParts[2]),
+          parseInt(startParts[0]),
+          parseInt(startParts[1]),
+          0, 0
+        );
+        var newEnd = new Date(
+          parseInt(dateParts[0]),
+          parseInt(dateParts[1]) - 1,
+          parseInt(dateParts[2]),
+          parseInt(endParts[0]),
+          parseInt(endParts[1]),
+          0, 0
+        );
+
+        if (newEnd <= newStart) {
+          CommonUtils.showToast('结束时间需晚于开始时间');
+          return false;
+        }
+
+        Store.updateSchedule(schedule.id, {
+          title: titleVal,
+          fleetId: fleetIdVal,
+          fleetName: fleet ? fleet.name : '',
+          startTime: newStart.toISOString(),
+          endTime: newEnd.toISOString(),
+          location: locationVal,
+          isFromCycle: false
+        });
+
+        CommonUtils.showToast('保存成功');
+        refreshPage();
+        return true;
+      }
+    });
+  }
+
+  function refreshPage() {
+    var mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+    mainContent.innerHTML = '';
+    render(mainContent);
   }
 
   function render(container) {
