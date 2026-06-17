@@ -2,6 +2,7 @@ var SchedulePage = (function() {
   var selectedDate = new Date();
   var filterType = 'all';
   var showBoard = false;
+  var boardFilter = 'all';
 
   function getScheduleMap() {
     var schedules = Store.getState().schedules;
@@ -129,6 +130,18 @@ var SchedulePage = (function() {
     }
   }
 
+  function getTodoType(schedule) {
+    var exec = getExecStatus(schedule);
+    if (exec.ready) return 'ready';
+    if (exec.conflicts && exec.conflicts.length > 0) return 'conflict';
+    var a = getApprovalStatus(schedule);
+    var f = getAirspaceStatus(schedule);
+    if (!a.done && !f.done) return 'todo_both';
+    if (!a.done) return 'todo_approval';
+    if (!f.done) return 'todo_filing';
+    return 'partial';
+  }
+
   function getExecStatus(schedule) {
     if (schedule.status === 'cancelled') return { label: '已取消', type: 'error', ready: false };
     var a = getApprovalStatus(schedule);
@@ -154,20 +167,75 @@ var SchedulePage = (function() {
     };
   }
 
+  function getRehearsalStatus(schedule) {
+    if (!schedule.fleetId) return { label: '未安排机阵', done: false };
+    var dateKey = DateUtils.formatDate(schedule.startTime, 'YYYY-MM-DD');
+    var daySchedules = Store.getSchedulesByDate(dateKey);
+    var rehearsals = daySchedules.filter(function(s) {
+      return s.id !== schedule.id &&
+             s.fleetId === schedule.fleetId &&
+             s.type === 'rehearsal' &&
+             s.status !== 'cancelled';
+    });
+    if (rehearsals.length > 0) {
+      return { label: '已安排 ' + rehearsals.length + ' 场排练', done: true, count: rehearsals.length };
+    }
+    return { label: '未安排排练', done: false, count: 0 };
+  }
+
+  function goToApproval(scheduleId) {
+    Modal.hideAll();
+    setTimeout(function() {
+      Router.navigate('approval');
+    }, 150);
+  }
+
+  function goToFiling(scheduleId) {
+    Modal.hideAll();
+    setTimeout(function() {
+      Router.navigate('filing');
+    }, 150);
+  }
+
   function renderExecutionBoard() {
     var state = Store.getState();
     var now = new Date();
-    now.setHours(23, 59, 59, 999);
+    now.setHours(0, 0, 0, 0);
     var futureLimit = new Date(now.getTime() + 90 * 24 * 3600 * 1000);
 
     var performances = state.schedules.filter(function(s) {
       if (s.type !== 'performance') return false;
       if (s.status === 'cancelled') return false;
-      var t = new Date(s.startTime).getTime();
-      return t >= now.getTime() && t <= futureLimit.getTime();
+      var endTime = new Date(s.endTime).getTime();
+      return endTime >= now.getTime() && new Date(s.startTime).getTime() <= futureLimit.getTime();
     }).sort(function(a, b) {
       return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
     });
+
+    var filterTabs = [
+      { key: 'all', label: '全部', count: performances.length },
+      { key: 'ready', label: '可执行', count: 0 },
+      { key: 'todo_approval', label: '待审批', count: 0 },
+      { key: 'todo_filing', label: '待报备', count: 0 },
+      { key: 'conflict', label: '有冲突', count: 0 }
+    ];
+
+    performances.forEach(function(p) {
+      var todo = getTodoType(p);
+      if (todo === 'ready') filterTabs[1].count++;
+      else if (todo === 'todo_approval' || todo === 'todo_both') filterTabs[2].count++;
+      else if (todo === 'todo_filing') filterTabs[3].count++;
+      else if (todo === 'conflict') filterTabs[4].count++;
+    });
+
+    var filtered = performances;
+    if (boardFilter !== 'all') {
+      filtered = performances.filter(function(p) {
+        var todo = getTodoType(p);
+        if (boardFilter === 'todo_approval') return todo === 'todo_approval' || todo === 'todo_both';
+        return todo === boardFilter;
+      });
+    }
 
     var stats = { ready: 0, partial: 0, conflict: 0 };
     performances.forEach(function(p) {
@@ -190,7 +258,7 @@ var SchedulePage = (function() {
     header.innerHTML =
       '<div>' +
       '<div style="font-size:var(--font-size-lg);font-weight:var(--font-weight-semibold)">🎯 演出执行看板</div>' +
-      '<div style="font-size:var(--font-size-sm);opacity:0.85">未来 90 天待执行演出</div>' +
+      '<div style="font-size:var(--font-size-sm);opacity:0.85">未来 90 天演出（含今日）</div>' +
       '</div>' +
       '<div class="grid-3" style="gap:12px;min-width:160px">' +
       '<div style="text-align:center;background:rgba(255,255,255,0.15);border-radius:var(--radius-sm);padding:6px 8px"><div style="font-weight:bold;font-size:18px">' + stats.ready + '</div><div style="font-size:10px;opacity:0.85">可执行</div></div>' +
@@ -199,26 +267,54 @@ var SchedulePage = (function() {
       '</div>';
     wrapper.appendChild(header);
 
-    if (performances.length === 0) {
+    var filterBar = document.createElement('div');
+    filterBar.style.display = 'flex';
+    filterBar.style.gap = '6px';
+    filterBar.style.flexWrap = 'wrap';
+    filterBar.style.marginBottom = 'var(--spacing-md)';
+    filterTabs.forEach(function(tab) {
+      var btn = document.createElement('span');
+      btn.style.fontSize = '11px';
+      btn.style.padding = '4px 10px';
+      btn.style.borderRadius = '12px';
+      btn.style.cursor = 'pointer';
+      btn.style.border = '1px solid rgba(255,255,255,0.3)';
+      btn.style.background = boardFilter === tab.key ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)';
+      btn.textContent = tab.label + ' ' + tab.count;
+      btn.onclick = function(e) {
+        e.stopPropagation();
+        boardFilter = tab.key;
+        refreshPage(selectedDate);
+      };
+      filterBar.appendChild(btn);
+    });
+    wrapper.appendChild(filterBar);
+
+    if (filtered.length === 0) {
       var empty = document.createElement('div');
       empty.style.textAlign = 'center';
       empty.style.padding = 'var(--spacing-lg) 0';
       empty.style.opacity = '0.7';
-      empty.textContent = '暂无待执行演出';
+      empty.textContent = boardFilter === 'all' ? '暂无待执行演出' : '该分类下暂无演出';
       wrapper.appendChild(empty);
     } else {
-      performances.slice(0, 5).forEach(function(p) {
+      filtered.slice(0, 6).forEach(function(p) {
         var exec = getExecStatus(p);
         var a = getApprovalStatus(p);
         var f = getAirspaceStatus(p);
+        var todo = getTodoType(p);
 
         var row = document.createElement('div');
         row.style.padding = '10px';
         row.style.marginBottom = '8px';
         row.style.background = 'rgba(255,255,255,0.12)';
         row.style.borderRadius = 'var(--radius-md)';
-        row.style.cursor = 'pointer';
-        row.onclick = function() {
+
+        var top = document.createElement('div');
+        top.className = 'flex-between';
+        top.style.marginBottom = '6px';
+        top.style.cursor = 'pointer';
+        top.onclick = function() {
           var d = new Date(p.startTime);
           selectedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
           showBoard = false;
@@ -227,10 +323,6 @@ var SchedulePage = (function() {
             showScheduleDetail(p);
           }, 200);
         };
-
-        var top = document.createElement('div');
-        top.className = 'flex-between';
-        top.style.marginBottom = '6px';
         top.innerHTML =
           '<div style="font-weight:var(--font-weight-semibold);font-size:var(--font-size-base)">' + p.title + '</div>' +
           '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:' +
@@ -251,25 +343,102 @@ var SchedulePage = (function() {
         var tags = document.createElement('div');
         tags.style.marginTop = '6px';
         tags.style.fontSize = '10px';
-        tags.innerHTML =
-          '<span style="padding:2px 6px;border-radius:8px;background:rgba(255,255,255,0.15);margin-right:4px">' +
-            (a.done ? '✓ ' : '○ ') + a.label + '</span>' +
-          '<span style="padding:2px 6px;border-radius:8px;background:rgba(255,255,255,0.15);margin-right:4px">' +
-            (f.done ? '✓ ' : '○ ') + f.label + '</span>' +
-          (exec.conflicts && exec.conflicts.length > 0 ?
-            '<span style="padding:2px 6px;border-radius:8px;background:rgba(245,63,63,0.5);margin-right:4px">⚡ ' + exec.conflicts.length + '冲突</span>' : '');
+        tags.style.display = 'flex';
+        tags.style.flexWrap = 'wrap';
+        tags.style.gap = '4px';
+        var aTag = document.createElement('span');
+        aTag.style.padding = '2px 6px';
+        aTag.style.borderRadius = '8px';
+        aTag.style.background = 'rgba(255,255,255,0.15)';
+        aTag.innerHTML = (a.done ? '✓ ' : '○ ') + a.label;
+        tags.appendChild(aTag);
+
+        var fTag = document.createElement('span');
+        fTag.style.padding = '2px 6px';
+        fTag.style.borderRadius = '8px';
+        fTag.style.background = 'rgba(255,255,255,0.15)';
+        fTag.innerHTML = (f.done ? '✓ ' : '○ ') + f.label;
+        tags.appendChild(fTag);
+
+        if (exec.conflicts && exec.conflicts.length > 0) {
+          var cTag = document.createElement('span');
+          cTag.style.padding = '2px 6px';
+          cTag.style.borderRadius = '8px';
+          cTag.style.background = 'rgba(245,63,63,0.5)';
+          cTag.textContent = '⚡ ' + exec.conflicts.length + '冲突';
+          tags.appendChild(cTag);
+        }
         row.appendChild(tags);
+
+        var actions = document.createElement('div');
+        actions.style.marginTop = '8px';
+        actions.style.display = 'flex';
+        actions.style.gap = '6px';
+        actions.style.fontSize = '11px';
+
+        if (todo === 'todo_approval' || todo === 'todo_both') {
+          var apBtn = document.createElement('button');
+          apBtn.className = 'btn btn-primary';
+          apBtn.style.padding = '3px 10px';
+          apBtn.style.fontSize = '11px';
+          apBtn.style.minHeight = '24px';
+          apBtn.textContent = '→ 去审批';
+          apBtn.onclick = function(e) {
+            e.stopPropagation();
+            goToApproval(p.id);
+          };
+          actions.appendChild(apBtn);
+        }
+        if (todo === 'todo_filing' || todo === 'todo_both') {
+          var fiBtn = document.createElement('button');
+          fiBtn.className = 'btn btn-primary';
+          fiBtn.style.padding = '3px 10px';
+          fiBtn.style.fontSize = '11px';
+          fiBtn.style.minHeight = '24px';
+          fiBtn.style.background = '#13c2c2';
+          fiBtn.style.borderColor = '#13c2c2';
+          fiBtn.textContent = '→ 去报备';
+          fiBtn.onclick = function(e) {
+            e.stopPropagation();
+            goToFiling(p.id);
+          };
+          actions.appendChild(fiBtn);
+        }
+        if (todo === 'conflict') {
+          var cfBtn = document.createElement('button');
+          cfBtn.className = 'btn btn-primary';
+          cfBtn.style.padding = '3px 10px';
+          cfBtn.style.fontSize = '11px';
+          cfBtn.style.minHeight = '24px';
+          cfBtn.style.background = '#f53f3f';
+          cfBtn.style.borderColor = '#f53f3f';
+          cfBtn.textContent = '→ 调整时间';
+          cfBtn.onclick = function(e) {
+            e.stopPropagation();
+            var d = new Date(p.startTime);
+            selectedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            showBoard = false;
+            refreshPage(selectedDate);
+            setTimeout(function() {
+              showScheduleEdit(p);
+            }, 200);
+          };
+          actions.appendChild(cfBtn);
+        }
+        if (actions.children.length > 0) {
+          row.appendChild(actions);
+        }
 
         wrapper.appendChild(row);
       });
 
-      if (performances.length > 5) {
+      if (filtered.length > 6) {
         var more = document.createElement('div');
         more.style.textAlign = 'center';
         more.style.paddingTop = '4px';
         more.style.fontSize = 'var(--font-size-sm)';
         more.style.opacity = '0.8';
-        more.textContent = '还有 ' + (performances.length - 5) + ' 场演出...';
+        more.textContent = '还有 ' + (filtered.length - 6) + ' 场演出...';
         wrapper.appendChild(more);
       }
     }
@@ -469,6 +638,8 @@ var SchedulePage = (function() {
       var exec2 = getExecStatus(schedule);
       var a = getApprovalStatus(schedule);
       var f = getAirspaceStatus(schedule);
+      var r = getRehearsalStatus(schedule);
+      var hasConflict = exec2.conflicts && exec2.conflicts.length > 0;
 
       var approvalDivider = document.createElement('div');
       approvalDivider.className = 'divider';
@@ -477,12 +648,12 @@ var SchedulePage = (function() {
       var execSummary = document.createElement('div');
       execSummary.style.padding = 'var(--spacing-sm) var(--spacing-md)';
       execSummary.style.borderRadius = 'var(--radius-md)';
-      execSummary.style.marginBottom = 'var(--spacing-sm)';
+      execSummary.style.marginBottom = 'var(--spacing-md)';
       if (exec2.ready) {
         execSummary.style.background = 'var(--color-success-bg)';
         execSummary.style.color = 'var(--color-success)';
-        execSummary.innerHTML = '✅ ' + exec2.label;
-      } else if (exec2.conflicts && exec2.conflicts.length > 0) {
+        execSummary.innerHTML = '✅ ' + exec2.label + ' · 可正常执行';
+      } else if (hasConflict) {
         execSummary.style.background = 'var(--color-error-bg)';
         execSummary.style.color = 'var(--color-error)';
         execSummary.innerHTML = '⚡ 档期存在 ' + exec2.conflicts.length + ' 处冲突，请调整时间';
@@ -493,31 +664,116 @@ var SchedulePage = (function() {
       }
       content.appendChild(execSummary);
 
-      var checklist = document.createElement('div');
-      checklist.className = 'flex';
-      checklist.style.gap = 'var(--spacing-md)';
-      checklist.style.marginBottom = 'var(--spacing-sm)';
+      var checkTitle = document.createElement('div');
+      checkTitle.style.fontWeight = 'var(--font-weight-medium)';
+      checkTitle.style.marginBottom = 'var(--spacing-sm)';
+      checkTitle.innerHTML = '📋 执行清单（点击卡片直达处理）';
+      content.appendChild(checkTitle);
 
-      var apCheck = document.createElement('div');
-      apCheck.style.flex = '1';
-      apCheck.style.padding = 'var(--spacing-sm)';
-      apCheck.style.borderRadius = 'var(--radius-md)';
-      apCheck.style.background = a.done ? 'var(--color-success-bg)' : 'var(--color-bg-gray)';
-      apCheck.innerHTML =
-        '<div style="font-size:var(--font-size-sm);color:' + (a.done ? 'var(--color-success)' : 'var(--color-text-secondary)') + '">' +
-        (a.done ? '✓ ' : '○ ') + '<b>审批</b> · ' + a.label + '</div>';
-      checklist.appendChild(apCheck);
+      function renderCheckItem(icon, title, status, done, onClick, btnText) {
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.padding = 'var(--spacing-sm) var(--spacing-md)';
+        row.style.marginBottom = 'var(--spacing-xs)';
+        row.style.borderRadius = 'var(--radius-md)';
+        row.style.background = done ? 'var(--color-success-bg)' : 'var(--color-bg-gray)';
+        row.style.cursor = onClick ? 'pointer' : 'default';
 
-      var fsCheck = document.createElement('div');
-      fsCheck.style.flex = '1';
-      fsCheck.style.padding = 'var(--spacing-sm)';
-      fsCheck.style.borderRadius = 'var(--radius-md)';
-      fsCheck.style.background = f.done ? 'var(--color-success-bg)' : 'var(--color-bg-gray)';
-      fsCheck.innerHTML =
-        '<div style="font-size:var(--font-size-sm);color:' + (f.done ? 'var(--color-success)' : 'var(--color-text-secondary)') + '">' +
-        (f.done ? '✓ ' : '○ ') + '<b>空域</b> · ' + f.label + '</div>';
-      checklist.appendChild(fsCheck);
-      content.appendChild(checklist);
+        var info = document.createElement('div');
+        info.style.flex = '1';
+        info.innerHTML =
+          '<div style="font-size:var(--font-size-sm);font-weight:var(--font-weight-medium);color:' +
+            (done ? 'var(--color-success)' : 'var(--color-text)') + '">' +
+            (done ? '✓ ' : '○ ') + icon + ' ' + title + '</div>' +
+          '<div style="font-size:var(--font-size-xs);color:' +
+            (done ? 'var(--color-success)' : 'var(--color-text-secondary)') + '">' + status + '</div>';
+        row.appendChild(info);
+
+        if (onClick && btnText) {
+          var btn = document.createElement('button');
+          btn.className = 'btn btn-primary';
+          btn.style.padding = '4px 12px';
+          btn.style.fontSize = '11px';
+          btn.style.minHeight = '26px';
+          btn.textContent = btnText;
+          btn.onclick = function(e) {
+            e.stopPropagation();
+            onClick();
+          };
+          row.appendChild(btn);
+        }
+
+        if (onClick) {
+          row.onclick = onClick;
+        }
+
+        return row;
+      }
+
+      content.appendChild(renderCheckItem(
+        '📝',
+        '表演审批',
+        a.label,
+        a.done,
+        function() { goToApproval(schedule.id); },
+        a.done ? null : (schedule.approvalId ? '继续审批' : '发起审批')
+      ));
+
+      content.appendChild(renderCheckItem(
+        '✈️',
+        '空域报备',
+        f.label,
+        f.done,
+        function() { goToFiling(schedule.id); },
+        f.done ? null : '去报备'
+      ));
+
+      content.appendChild(renderCheckItem(
+        '⚡',
+        '档期冲突检查',
+        hasConflict ? ('存在 ' + exec2.conflicts.length + ' 处冲突') : '无冲突',
+        !hasConflict,
+        hasConflict ? function() {
+          Modal.hide();
+          setTimeout(function() { showScheduleEdit(schedule); }, 150);
+        } : null,
+        hasConflict ? '调整时间' : null
+      ));
+
+      content.appendChild(renderCheckItem(
+        '🎯',
+        '排练安排',
+        r.label,
+        r.done,
+        r.done ? null : function() {
+          Modal.hideAll();
+          setTimeout(function() {
+            Router.navigate('cycle');
+          }, 150);
+        },
+        r.done ? null : '去安排'
+      ));
+
+      var quickActions = document.createElement('div');
+      quickActions.style.display = 'flex';
+      quickActions.style.gap = 'var(--spacing-sm)';
+      quickActions.style.marginTop = 'var(--spacing-md)';
+      var apBtn = document.createElement('button');
+      apBtn.className = 'btn btn-primary';
+      apBtn.style.flex = '1';
+      apBtn.textContent = '📝 分支审批';
+      apBtn.onclick = function() { goToApproval(schedule.id); };
+      quickActions.appendChild(apBtn);
+      var fiBtn = document.createElement('button');
+      fiBtn.className = 'btn btn-primary';
+      fiBtn.style.flex = '1';
+      fiBtn.style.background = '#13c2c2';
+      fiBtn.style.borderColor = '#13c2c2';
+      fiBtn.textContent = '✈️ 报批登记';
+      fiBtn.onclick = function() { goToFiling(schedule.id); };
+      quickActions.appendChild(fiBtn);
+      content.appendChild(quickActions);
     }
 
     if (schedule.approvalId) {
@@ -530,23 +786,12 @@ var SchedulePage = (function() {
         var approvalTitle = document.createElement('div');
         approvalTitle.style.fontWeight = 'var(--font-weight-medium)';
         approvalTitle.style.marginBottom = 'var(--spacing-sm)';
-        approvalTitle.textContent = '关联审批流程';
+        approvalTitle.textContent = '� 审批流程进度';
         content.appendChild(approvalTitle);
 
         var flowEl = ApprovalFlow.create(approval.steps);
         content.appendChild(flowEl);
       }
-    }
-
-    if (schedule.type === 'performance' && !schedule.approvalId) {
-      var divider2 = document.createElement('div');
-      divider2.className = 'divider';
-      content.appendChild(divider2);
-      var tip2 = document.createElement('div');
-      tip2.className = 'text-secondary';
-      tip2.style.fontSize = 'var(--font-size-sm)';
-      tip2.textContent = '💡 此表演尚未发起审批，请前往「分支审批」模块点「+ 发起审批」';
-      content.appendChild(tip2);
     }
 
     var adjacents = schedule.fleetId ? getFleetDayAdjacents(schedule) : [];
@@ -968,6 +1213,10 @@ var SchedulePage = (function() {
     render: render,
     init: init,
     checkConflicts: checkConflicts,
-    refreshPage: refreshPage
+    refreshPage: refreshPage,
+    showScheduleDetail: showScheduleDetail,
+    getExecStatus: getExecStatus,
+    getApprovalStatus: getApprovalStatus,
+    getAirspaceStatus: getAirspaceStatus
   };
 })();

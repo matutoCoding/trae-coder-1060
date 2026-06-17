@@ -159,6 +159,62 @@ var ApprovalPage = (function() {
       content.appendChild(routeRow);
     }
 
+    if (approval.scheduleId) {
+      var schedule = Store.getScheduleById(approval.scheduleId);
+      if (schedule) {
+        var divider0 = document.createElement('div');
+        divider0.className = 'divider';
+        content.appendChild(divider0);
+
+        var schedTitle = document.createElement('div');
+        schedTitle.style.fontWeight = 'var(--font-weight-medium)';
+        schedTitle.style.marginBottom = 'var(--spacing-sm)';
+        schedTitle.textContent = '📅 关联演出排期';
+        content.appendChild(schedTitle);
+
+        var schedCard = document.createElement('div');
+        schedCard.style.padding = 'var(--spacing-sm) var(--spacing-md)';
+        schedCard.style.background = 'var(--color-bg-gray)';
+        schedCard.style.borderRadius = 'var(--radius-md)';
+        schedCard.style.marginBottom = 'var(--spacing-sm)';
+        schedCard.style.cursor = 'pointer';
+        schedCard.innerHTML =
+          '<div style="font-weight:var(--font-weight-medium);margin-bottom:4px">' + schedule.title + '</div>' +
+          '<div style="font-size:var(--font-size-xs);color:var(--color-text-secondary)">' +
+          '📅 ' + DateUtils.formatDate(schedule.startTime, 'MM-DD HH:mm') + '-' +
+          DateUtils.formatDate(schedule.endTime, 'HH:mm') +
+          ' · 🚁 ' + (schedule.fleetName || '-') +
+          ' · 📍 ' + (schedule.location || '-') +
+          '</div>';
+        schedCard.onclick = function() {
+          Modal.hideAll();
+          setTimeout(function() {
+            Router.navigate('schedule');
+            var d = new Date(schedule.startTime);
+            var targetDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            setTimeout(function() {
+              SchedulePage.refreshPage(targetDate);
+              setTimeout(function() {
+                var s = Store.getScheduleById(schedule.id);
+                if (s) {
+                  SchedulePage.showScheduleDetail(s);
+                }
+              }, 200);
+            }, 150);
+          }, 150);
+        };
+        content.appendChild(schedCard);
+
+        var schedBtn = document.createElement('button');
+        schedBtn.className = 'btn btn-primary';
+        schedBtn.style.width = '100%';
+        schedBtn.style.marginBottom = 'var(--spacing-md)';
+        schedBtn.textContent = '→ 查看排期详情';
+        schedBtn.onclick = schedCard.onclick;
+        content.appendChild(schedBtn);
+      }
+    }
+
     var divider = document.createElement('div');
     divider.className = 'divider';
     content.appendChild(divider);
@@ -166,7 +222,7 @@ var ApprovalPage = (function() {
     var flowTitle = document.createElement('div');
     flowTitle.style.fontWeight = 'var(--font-weight-medium)';
     flowTitle.style.marginBottom = 'var(--spacing-sm)';
-    flowTitle.textContent = '审批流程';
+    flowTitle.textContent = '📐 审批流程';
     content.appendChild(flowTitle);
 
     var flowEl = ApprovalFlow.create(approval.steps);
@@ -174,6 +230,23 @@ var ApprovalPage = (function() {
 
     var canApprove = approval.status === 'pending' && approval.currentStep > 0;
     var isDraft = approval.status === 'draft';
+    var isRejected = approval.status === 'rejected';
+
+    if (isRejected && approval.scheduleId) {
+      var resubmitDivider = document.createElement('div');
+      resubmitDivider.className = 'divider';
+      content.appendChild(resubmitDivider);
+
+      var tip = document.createElement('div');
+      tip.className = 'text-error';
+      tip.style.fontSize = 'var(--font-size-sm)';
+      tip.style.padding = 'var(--spacing-sm) var(--spacing-md)';
+      tip.style.background = 'var(--color-error-bg)';
+      tip.style.borderRadius = 'var(--radius-md)';
+      tip.style.marginBottom = 'var(--spacing-sm)';
+      tip.textContent = '⚠️ 此审批已被驳回，可前往排期详情调整后重新发起';
+      content.appendChild(tip);
+    }
 
     Modal.show({
       title: approval.title,
