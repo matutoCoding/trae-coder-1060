@@ -1,0 +1,44 @@
+:root {
+  --color-primary: #1677ff;
+  --color-primary-light: #4096ff;
+  --color-primary-dark: #0958d9;
+  --color-primary-bg: rgba(22, 119, 255, 0.08);
+  --color-primary-gradient: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  
+  --color-secondary: #722ED1;
+  --color-secondary-light: #9254DE;
+  --color-secondary-bg: rgba(114, 46, 209, 0.08);
+  
+  --color-success: #00B42A;
+  --color-success-light: #23C343;
+  --color-success-bg: rgba(0, 180, 42, 0.08);
+  
+  --color-warning: #FF7D00;
+  --color-warning-light: #FF9A2E;
+  --color-warning-bg: rgba(255, 125, 0, 0.08);
+  
+  --color-error: #F53F3F;
+  --color-error-light: #F76560;
+  --color-error-bg: rgba(245, 63, 63, 0.08);
+  
+  --color-info: #13C2C2;
+  --color-info-light: #36CFC9;
+  --color-info-bg: rgba(19, 194, 194, 0.08);
+  
+  --color-bg-page: #f5f7fa;
+  --color-bg-card: #ffffff;
+  --color-bg-gray: #f2f3f5;
+  
+  --color-text-primary: #1D2129;
+  --color-text-secondary: #4E5969;
+  --color-text-tertiary: #86909C;
+  --color-text-disabled: #C9CDD4;
+  --color-text-white: #ffffff;
+  
+  --color-border: #E5E6EB;
+  --color-border-light: #F2F3F5;
+  
+  --color-performance: #1677ff;
+  --color-rehearsal: #13C2C2;
+  --color-occupied: #FF7D00;
+}
